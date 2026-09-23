@@ -46,6 +46,7 @@ set(REXSYSTEM_SOURCES
     thread.cpp
     thread_state.cpp
     xex_module.cpp
+    platform/android_bridge.cpp
 )
 
 add_library(rexruntime SHARED ${REXSYSTEM_SOURCES})
@@ -83,7 +84,7 @@ target_link_libraries(rexruntime
         fmt::fmt
         spdlog::spdlog
         tomlplusplus
-        SDL3::SDL3
+        android
     PRIVATE
         aes128
         mspack

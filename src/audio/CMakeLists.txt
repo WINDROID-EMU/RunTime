@@ -9,11 +9,11 @@ add_library(rexaudio OBJECT
     xma_context.cpp
     xma_decoder.cpp
     xma_register_file.cpp
+    # AAudio Android native backend
+    android/aaudio_system.cpp
+    android/aaudio_driver.cpp
     # NOP backend (always available)
     nop/nop_audio_system.cpp
-    # SDL backend
-    sdl/sdl_audio_system.cpp
-    sdl/sdl_audio_driver.cpp
 )
 add_library(rex::audio ALIAS rexaudio)
 
@@ -36,6 +36,6 @@ target_include_directories(rexaudio PUBLIC
 )
 
 target_link_libraries(rexaudio
-    PUBLIC rexcore SDL3::SDL3
+    PUBLIC rexcore aaudio
     PRIVATE libavcodec libavutil
 )

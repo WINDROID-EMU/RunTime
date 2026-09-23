@@ -121,7 +121,7 @@ endif()
 
 # Install the entry point source and ReXApp for SDK consumers
 install(FILES
-    src/ui/windowed_app_main_sdl.cpp
+    src/ui/windowed_app_main_android.cpp
     src/ui/rex_app.cpp
     DESTINATION ${CMAKE_INSTALL_DATADIR}/rexglue
 )

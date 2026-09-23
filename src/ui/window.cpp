@@ -43,7 +43,7 @@ REXCVAR_DEFINE_INT32(monitor, 0, "UI/Window",
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_STRING(video_driver, "", "UI/Window",
-                      "SDL video driver to use (empty picks SDL's default for the Android session)")
+                      "Video driver or surface backend to use")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_INT32(video_mode_width, 1280, "Display", "Guest video mode width in pixels")

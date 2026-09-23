@@ -12,12 +12,9 @@ set(REXUI_CORE_SOURCES
     menu_item.cpp
     presenter.cpp
     renderdoc_api.cpp
-    sdl_virtual_key.cpp
     window.cpp
-    window_sdl.cpp
     windowed_app.cpp
     windowed_app_context.cpp
-    windowed_app_context_sdl.cpp
 )
 
 # Optional overlay dialogs
@@ -48,9 +45,11 @@ set(REXUI_VULKAN_SOURCES
     vulkan/vulkan_util.cpp
 )
 
-# Platform-specific surface (Android Native Window)
+# Platform-specific surface and window (Android Native Window & NDK Looper)
 set(REXUI_PLATFORM_SOURCES
     surface_android.cpp
+    window_android.cpp
+    windowed_app_context_android.cpp
 )
 
 # Combine sources
@@ -80,7 +79,6 @@ target_link_libraries(rexui PUBLIC
     rexcore
     renderdoc
     imgui::imgui
-    SDL3::SDL3
     android
 )
 target_link_libraries(rexui PRIVATE utf8cpp)

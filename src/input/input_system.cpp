@@ -17,14 +17,14 @@
 #include <rex/input/flags.h>
 #include <rex/input/input_driver.h>
 #include <rex/input/input_system.h>
+#include <rex/input/android/android_input_driver.h>
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/input/nop/nop_input_driver.h>
-#include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/input/state_merge.h>
 #include <rex/logging.h>
 
-REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl")
-    .allowed({"sdl"});
+REXCVAR_DEFINE_STRING(input_backend, "android", "Input", "Input backend: android")
+    .allowed({"android"});
 
 REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-through");
 namespace rex::input {
@@ -324,11 +324,9 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
   auto input = std::make_unique<InputSystem>(nullptr);
 
   if (!tool_mode) {
-    if (REXCVAR_GET(input_backend) == "sdl") {
-      auto sdl_driver = std::make_unique<sdl::SDLInputDriver>(nullptr, 0);
-      if (sdl_driver->Setup() == X_STATUS_SUCCESS) {
-        input->AddDriver(std::move(sdl_driver));
-      }
+    auto android_driver = std::make_unique<android::AndroidInputDriver>(nullptr, 0);
+    if (android_driver->Setup() == X_STATUS_SUCCESS) {
+      input->AddDriver(std::move(android_driver));
     }
 
     // MnK driver (keyboard/mouse -> controller emulation)

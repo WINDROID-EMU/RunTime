@@ -16,7 +16,7 @@ namespace rex::audio {
 namespace {
 
 // One output device exists, so the mix parameters are process state. The
-// reader is the SDL device callback, which runs every 5.33 ms, so a plain
+// reader is the audio device callback, which runs every 5.33 ms, so a plain
 // mutex costs nothing and avoids a torn read across the four weights.
 std::mutex g_mutex;
 StereoFold g_fold = {};
