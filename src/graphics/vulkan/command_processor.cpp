@@ -60,9 +60,15 @@ REXCVAR_DEFINE_BOOL(vulkan_async_skip_incomplete_frames, true, "GPU/Vulkan",
                     "used placeholder pipelines to avoid visible flashing")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_BOOL(vulkan_submit_on_primary_buffer_end, false, "GPU/Vulkan",
+                    "Submit command buffer when PM4 primary buffer ends")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+#else
 REXCVAR_DEFINE_BOOL(vulkan_submit_on_primary_buffer_end, true, "GPU/Vulkan",
                     "Submit command buffer when PM4 primary buffer ends")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+#endif
 
 REXCVAR_DEFINE_BOOL(vulkan_dynamic_rendering, true, "GPU/Vulkan",
                     "Use VK_KHR_dynamic_rendering for Vulkan GPU emulation when supported by the "

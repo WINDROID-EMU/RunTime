@@ -37,10 +37,17 @@
 
 REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
 
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_BOOL(clear_memory_page_state, false, "GPU",
+                    "Refresh page-valid state from GPU-written memory at frame end. "
+                    "Disable for minor CPU overhead reduction, but may break memory coherency.")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+#else
 REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                     "Refresh page-valid state from GPU-written memory at frame end. "
                     "Disable for minor CPU overhead reduction, but may break memory coherency.")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+#endif
 
 REXCVAR_DEFINE_BOOL(occlusion_query_enable, true, "GPU", "Enable host occlusion query handling")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);

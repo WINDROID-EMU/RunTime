@@ -26,6 +26,17 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_INT32(texture_cache_memory_limit_render_to_texture, 96, "GPU",
+                     "Texture cache memory limit for render-to-texture (MB)")
+    .range(1, 256)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(texture_cache_memory_limit_soft, 512, "GPU",
+                     "Soft texture cache memory limit (MB)")
+    .range(64, 4096)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+#else
 REXCVAR_DEFINE_INT32(texture_cache_memory_limit_render_to_texture, 24, "GPU",
                      "Texture cache memory limit for render-to-texture (MB)")
     .range(1, 256)
@@ -35,6 +46,7 @@ REXCVAR_DEFINE_INT32(texture_cache_memory_limit_soft, 384, "GPU",
                      "Soft texture cache memory limit (MB)")
     .range(64, 4096)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+#endif
 
 REXCVAR_DEFINE_INT32(texture_cache_memory_limit_hard, 768, "GPU",
                      "Hard texture cache memory limit (MB)")
