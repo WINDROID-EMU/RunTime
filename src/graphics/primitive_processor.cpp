@@ -27,6 +27,16 @@
 #include <rex/math.h>
 #include <rex/types.h>
 
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_BOOL(force_convert_line_loops_to_strips, true, "GPU",
+                    "Force convert line loops to strips");
+
+REXCVAR_DEFINE_BOOL(force_convert_quad_lists_to_triangle_lists, true, "GPU",
+                    "Force convert quad lists to triangle lists");
+
+REXCVAR_DEFINE_BOOL(force_convert_triangle_fans_to_lists, true, "GPU",
+                    "Force convert triangle fans to lists");
+#else
 REXCVAR_DEFINE_BOOL(force_convert_line_loops_to_strips, false, "GPU",
                     "Force convert line loops to strips");
 
@@ -35,6 +45,7 @@ REXCVAR_DEFINE_BOOL(force_convert_quad_lists_to_triangle_lists, false, "GPU",
 
 REXCVAR_DEFINE_BOOL(force_convert_triangle_fans_to_lists, false, "GPU",
                     "Force convert triangle fans to lists");
+#endif
 
 REXCVAR_DEFINE_INT32(primitive_processor_cache_min_indices, 0, "GPU",
                      "Minimum indices for primitive processor cache")

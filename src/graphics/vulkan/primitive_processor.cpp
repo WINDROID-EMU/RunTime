@@ -21,6 +21,21 @@
 #include <rex/logging.h>
 #include <rex/ui/vulkan/util.h>
 
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_BOOL(vulkan_force_expand_point_sprites_in_vs, true, "GPU/Vulkan",
+                    "Force Vulkan point sprite expansion in the vertex shader, even when geometry "
+                    "shaders are available")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(
+    vulkan_force_expand_rectangle_lists_in_vs, true, "GPU/Vulkan",
+    "Force Vulkan rectangle list expansion in the vertex shader, even when geometry "
+    "shaders are available")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(vulkan_force_convert_quad_lists_to_triangle_lists, true, "GPU/Vulkan",
+                    "Force Vulkan quad list conversion to triangle lists in primitive processing, "
+                    "even when geometry shaders are available")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+#else
 REXCVAR_DEFINE_BOOL(vulkan_force_expand_point_sprites_in_vs, false, "GPU/Vulkan",
                     "Force Vulkan point sprite expansion in the vertex shader, even when geometry "
                     "shaders are available")
@@ -34,6 +49,7 @@ REXCVAR_DEFINE_BOOL(vulkan_force_convert_quad_lists_to_triangle_lists, false, "G
                     "Force Vulkan quad list conversion to triangle lists in primitive processing, "
                     "even when geometry shaders are available")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+#endif
 
 namespace rex::graphics::vulkan {
 

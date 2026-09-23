@@ -371,7 +371,13 @@ bool VulkanPipelineCache::Initialize() {
   if (REXCVAR_GET(vulkan_pipeline_creation_threads) != 0) {
     size_t creation_thread_count;
     if (REXCVAR_GET(vulkan_pipeline_creation_threads) < 0) {
+#if defined(__ANDROID__)
+      // Restrict auto threads to at most 2 on Android to prevent thermal throttling,
+      // battery drain, and CPU contention with the guest/rendering threads.
+      creation_thread_count = std::clamp(logical_processor_count / 2, uint32_t(1), uint32_t(2));
+#else
       creation_thread_count = std::max(logical_processor_count * 3 / 4, uint32_t(1));
+#endif
     } else {
       creation_thread_count = std::min(uint32_t(REXCVAR_GET(vulkan_pipeline_creation_threads)),
                                        logical_processor_count);
@@ -386,6 +392,86 @@ bool VulkanPipelineCache::Initialize() {
   }
 
   return true;
+}
+
+void VulkanPipelineCache::LoadHardwarePipelineCache(const std::filesystem::path& cache_file_path) {
+  SaveAndDestroyHardwarePipelineCache();
+  hardware_pipeline_cache_file_path_ = cache_file_path;
+
+  const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
+
+  std::vector<uint8_t> initial_data;
+  if (std::filesystem::exists(cache_file_path)) {
+    FILE* file = rex::filesystem::OpenFile(cache_file_path, "rb");
+    if (file) {
+      fseek(file, 0, SEEK_END);
+      long file_size = ftell(file);
+      fseek(file, 0, SEEK_SET);
+      if (file_size > 0) {
+        initial_data.resize(static_cast<size_t>(file_size));
+        if (fread(initial_data.data(), 1, initial_data.size(), file) != initial_data.size()) {
+          initial_data.clear();
+        }
+      }
+      fclose(file);
+    }
+  }
+
+  VkPipelineCacheCreateInfo cache_create_info = {};
+  cache_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+  cache_create_info.initialDataSize = initial_data.size();
+  cache_create_info.pInitialData = initial_data.empty() ? nullptr : initial_data.data();
+
+  VkResult result =
+      dfn.vkCreatePipelineCache(device, &cache_create_info, nullptr, &hardware_pipeline_cache_);
+  if (result == VK_SUCCESS) {
+    REXGPU_INFO(
+        "VulkanPipelineCache: Native hardware VkPipelineCache initialized (initial data: {} bytes)",
+        initial_data.size());
+  } else {
+    REXGPU_WARN(
+        "VulkanPipelineCache: Failed to create hardware VkPipelineCache (result={}), falling back "
+        "without cache",
+        static_cast<int32_t>(result));
+    hardware_pipeline_cache_ = VK_NULL_HANDLE;
+  }
+}
+
+void VulkanPipelineCache::SaveAndDestroyHardwarePipelineCache() {
+  if (hardware_pipeline_cache_ == VK_NULL_HANDLE) {
+    hardware_pipeline_cache_file_path_.clear();
+    return;
+  }
+
+  const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
+
+  if (!hardware_pipeline_cache_file_path_.empty()) {
+    size_t data_size = 0;
+    VkResult result =
+        dfn.vkGetPipelineCacheData(device, hardware_pipeline_cache_, &data_size, nullptr);
+    if (result == VK_SUCCESS && data_size > 0) {
+      std::vector<uint8_t> cache_data(data_size);
+      result =
+          dfn.vkGetPipelineCacheData(device, hardware_pipeline_cache_, &data_size, cache_data.data());
+      if (result == VK_SUCCESS) {
+        FILE* file = rex::filesystem::OpenFile(hardware_pipeline_cache_file_path_, "wb");
+        if (file) {
+          fwrite(cache_data.data(), 1, data_size, file);
+          fclose(file);
+          REXGPU_INFO("VulkanPipelineCache: Saved native hardware VkPipelineCache ({} bytes) to {}",
+                      data_size, rex::path_to_utf8(hardware_pipeline_cache_file_path_));
+        }
+      }
+    }
+  }
+
+  dfn.vkDestroyPipelineCache(device, hardware_pipeline_cache_, nullptr);
+  hardware_pipeline_cache_ = VK_NULL_HANDLE;
+  hardware_pipeline_cache_file_path_.clear();
 }
 
 void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_root,
@@ -407,6 +493,9 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
       return;
     }
   }
+
+  auto hw_cache_path = shader_storage_root / fmt::format("{:08X}.vk_pipeline_cache.bin", title_id);
+  LoadHardwarePipelineCache(hw_cache_path);
 
   bool edram_fragment_shader_interlock =
       render_target_cache_.GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
@@ -738,6 +827,8 @@ void VulkanPipelineCache::ShutdownShaderStorage() {
     shader_storage_file_ = nullptr;
     shader_storage_file_flush_needed_ = false;
   }
+
+  SaveAndDestroyHardwarePipelineCache();
 
   shader_storage_cache_root_.clear();
   shader_storage_title_id_ = 0;
@@ -3480,7 +3571,7 @@ bool VulkanPipelineCache::EnsurePipelineCreated(const PipelineCreationArguments&
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
   VkPipeline pipeline;
-  VkResult create_result = dfn.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1,
+  VkResult create_result = dfn.vkCreateGraphicsPipelines(device, hardware_pipeline_cache_, 1,
                                                          &pipeline_create_info, nullptr, &pipeline);
   if (create_result != VK_SUCCESS) {
     uint64_t ps_hash = creation_arguments.pixel_shader
