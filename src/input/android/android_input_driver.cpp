@@ -29,7 +29,7 @@ AndroidInputDriver::~AndroidInputDriver() {
 }
 
 X_STATUS AndroidInputDriver::Setup() {
-  device_id_ = 1;  // Primary gamepad
+  device_id_ = static_cast<DeviceId>(1);  // Primary gamepad
   return X_STATUS_SUCCESS;
 }
 
@@ -37,7 +37,7 @@ void AndroidInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
   DeviceInfo info{};
   info.id = device_id_;
   info.name = "Android Gamepad";
-  info.is_synthetic = false;
+  info.synthetic = false;
   out.push_back(info);
 }
 

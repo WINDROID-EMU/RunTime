@@ -108,10 +108,11 @@ void WindowAndroid::SetNativeWindow(ANativeWindow* window) {
     int32_t width = ANativeWindow_getWidth(native_window_);
     int32_t height = ANativeWindow_getHeight(native_window_);
     if (width > 0 && height > 0) {
-      OnResize();
+      WindowDestructionReceiver destruction_receiver(this);
+      OnActualSizeUpdate(uint32_t(width), uint32_t(height), destruction_receiver);
     }
   }
-  OnSurfaceInvalidated();
+  OnSurfaceChanged(native_window_ != nullptr);
 }
 
 uint32_t WindowAndroid::GetLatestDpiImpl() const {
@@ -125,7 +126,12 @@ bool WindowAndroid::OpenImpl() {
 
 void WindowAndroid::RequestCloseImpl() {
   android_app_context().UnregisterWindow(this);
-  OnClosing();
+  WindowDestructionReceiver destruction_receiver(this);
+  OnBeforeClose(destruction_receiver);
+  if (destruction_receiver.IsWindowDestroyed()) {
+    return;
+  }
+  OnAfterClose();
 }
 
 void WindowAndroid::ApplyNewFullscreen() {}

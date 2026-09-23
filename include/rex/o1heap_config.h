@@ -13,7 +13,11 @@
 // heap bin structure on first allocation.
 #pragma once
 
+#ifdef __cplusplus
 #include <cstdint>
+#else
+#include <stdint.h>
+#endif
 
 #define O1HEAP_CLZ(x) ((uint8_t)__builtin_clzll((unsigned long long)(x)))
 

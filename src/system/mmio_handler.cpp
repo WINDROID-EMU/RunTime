@@ -217,11 +217,6 @@ bool MMIOHandler::TryDecodeLoadStore(const uint8_t* p, DecodedLoadStore& decoded
   }
 
   return true;
-
-#else
-#error TryDecodeLoadStore not implemented for the target CPU architecture.
-  return false;
-#endif  // REX_ARCH
 }
 
 bool MMIOHandler::ExceptionCallbackThunk(arch::Exception* ex, void* data) {

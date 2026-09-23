@@ -16,6 +16,7 @@
 #include <rex/audio/downmix.h>
 #include <rex/audio/flags.h>
 #include <rex/cvar.h>
+#include <rex/dbg.h>
 #include <rex/logging.h>
 #include <rex/perf/counter.h>
 

@@ -60,7 +60,7 @@ class AndroidInputDriver : public InputDriver {
   int16_t thumb_rx_ = 0;
   int16_t thumb_ry_ = 0;
 
-  DeviceId device_id_ = 0;
+  DeviceId device_id_ = static_cast<DeviceId>(1);
 };
 
 }  // namespace rex::input::android

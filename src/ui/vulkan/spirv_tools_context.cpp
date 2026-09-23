@@ -16,6 +16,8 @@
 #include <rex/platform/env.h>
 #include <rex/ui/vulkan/spirv_tools_context.h>
 
+namespace rex::ui::vulkan {
+
 bool SpirvToolsContext::Initialize(unsigned int spirv_version) {
   std::filesystem::path library_path;
 
@@ -90,6 +92,4 @@ spv_result_t SpirvToolsContext::Validate(const uint32_t* words, size_t num_words
   return result;
 }
 
-}  // namespace vulkan
-}  // namespace ui
-}  // namespace rex
+}  // namespace rex::ui::vulkan

@@ -132,7 +132,7 @@ using HostRegister = Arm64Register;
 // Host Thread Context
 //=============================================================================
 
-class HostThreadContext {
+struct HostThreadContext {
   uint64_t x[31];
   uint64_t sp;
   uint64_t pc;

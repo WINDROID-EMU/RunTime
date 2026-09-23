@@ -323,7 +323,6 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
   access_out = PermsToPageAccess(e.perms);
 
   return true;
-#endif
 }
 
 FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, size_t length,

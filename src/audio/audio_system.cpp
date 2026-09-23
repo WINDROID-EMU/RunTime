@@ -28,6 +28,8 @@ REXCVAR_DEFINE_INT32(
     audio_maxqframes, 8, "Audio",
     "Max buffered audio frames (range 4-64). Lower reduces latency but may cause stuttering.");
 
+REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mutes all audio output");
+
 // As with normal Microsoft, there are like twelve different ways to access
 // the audio APIs. Early games use XMA*() methods almost exclusively to touch
 // decoders. Later games use XAudio*() and direct memory writes to the XMA

@@ -116,6 +116,8 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
 
 namespace std::chrono {
 
+template <class DestClock, class SourceClock>
+struct clock_time_conversion;
 
 template <>
 struct clock_time_conversion<::rex::chrono::WinSystemClock, ::rex::chrono::XSystemClock> {
@@ -162,5 +164,10 @@ struct clock_time_conversion<::rex::chrono::XSystemClock, ::rex::chrono::WinSyst
     return x_now + delta;
   }
 };
+
+template <class DestClock, class SourceClock, class Duration>
+inline auto clock_cast(const std::chrono::time_point<SourceClock, Duration>& t) {
+  return clock_time_conversion<DestClock, SourceClock>{}(t);
+}
 
 }  // namespace std::chrono
