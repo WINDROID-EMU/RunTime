@@ -3,7 +3,7 @@
 
 <h1 align="center">
   <br>
-  <a href="https://github.com/rexglue/rexglue-sdk">
+  <a href="https://github.com/WINDROID-EMU/RunTime">
     <img src="https://github.com/rexglue/rexglue-media/blob/main/ReX_Banner.png" alt="ReXGlue banner">
   </a>
   <br>
@@ -11,8 +11,8 @@
   <a href="https://discord.gg/CNTxwSNZfT">
     <img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white" alt="Discord">
   </a>
-  <a href="https://github.com/rexglue/rexglue-sdk/stargazers">
-    <img src="https://img.shields.io/github/stars/rexglue/rexglue-sdk" alt="rexglue-sdk stargazers">
+  <a href="https://github.com/WINDROID-EMU/RunTime/stargazers">
+    <img src="https://img.shields.io/github/stars/WINDROID-EMU/RunTime" alt="RunTime stargazers">
   </a>
 </h1>
 
@@ -20,18 +20,17 @@ ReXGlue converts Xbox 360 PowerPC code into portable C++ that runs natively on m
 
 ReXGlue is heavily rooted on the foundations of [Xenia](https://github.com/xenia-project), the Xbox 360 emulator. Rather than interpreting or JIT-compiling PPC instructions at runtime, ReXGlue takes a different path: it generates C++ source code ahead of time, an approach inspired by [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) and [rexdex's recompiler](https://github.com/rexdex/recompiler).
 
-Latest SDK builds and releases are published on [GitHub Releases](https://github.com/rexglue/rexglue-sdk/releases). Join the [Discord server](https://discord.gg/CNTxwSNZfT) for updates and share what you have created.
+Latest SDK builds and releases are published on [GitHub Releases](https://github.com/WINDROID-EMU/RunTime/releases). Join the [Discord server](https://discord.gg/CNTxwSNZfT) for updates and share what you have created.
 
 ## Builds
 
 | Channel | CI | Download |
 | --- | --- | --- |
-| Release | [![win-amd64](https://github.com/rexglue/rexglue-sdk/actions/workflows/build-win-amd64.yaml/badge.svg)](https://github.com/rexglue/rexglue-sdk/actions/workflows/build-win-amd64.yaml) [![linux-amd64](https://github.com/rexglue/rexglue-sdk/actions/workflows/build-linux-amd64.yaml/badge.svg)](https://github.com/rexglue/rexglue-sdk/actions/workflows/build-linux-amd64.yaml) [![linux-arm64](https://github.com/rexglue/rexglue-sdk/actions/workflows/build-linux-aarch64.yaml/badge.svg)](https://github.com/rexglue/rexglue-sdk/actions/workflows/build-linux-aarch64.yaml) | [Latest stable](https://github.com/rexglue/rexglue-sdk/releases/latest) |
-| Nightly | [![nightly](https://github.com/rexglue/rexglue-sdk/actions/workflows/nightly.yaml/badge.svg)](https://github.com/rexglue/rexglue-sdk/actions/workflows/nightly.yaml) | [Latest pre-release](https://github.com/rexglue/rexglue-sdk/releases?q=prerelease%3Atrue) |
+| Android ARM64 | [![android-arm64](https://github.com/WINDROID-EMU/RunTime/actions/workflows/build-android-arm64.yaml/badge.svg)](https://github.com/WINDROID-EMU/RunTime/actions/workflows/build-android-arm64.yaml) | [Latest stable](https://github.com/WINDROID-EMU/RunTime/releases/latest) |
 
 ## Quickstart
 
-For quick start guide, full CLI reference, and config file options, see the [wiki](https://github.com/rexglue/rexglue-sdk/wiki).
+For quick start guide, full CLI reference, and config file options, see the [wiki](https://github.com/WINDROID-EMU/RunTime/wiki).
 
 # **Disclaimer**
 ReXGlue is not affiliated with nor endorsed by Microsoft or Xbox. It is an independent project created for educational and development purposes. All trademarks and copyrights belong to their respective owners. 

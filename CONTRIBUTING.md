@@ -1,6 +1,6 @@
 # Contributing
 
-See the [Contributing Guide](https://github.com/rexglue/rexglue-sdk/wiki/Development/Contributing) in the wiki for:
+See the [Contributing Guide](https://github.com/WINDROID-EMU/RunTime/wiki/Development/Contributing) in the wiki for:
 
 - Build prerequisites and setup
 - Code style conventions

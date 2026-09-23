@@ -1,0 +1,101 @@
+name: Build Android ARM64
+
+on:
+  push:
+    branches:
+      - main
+      - development
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - development
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build-android-arm64:
+    name: Build Android ARM64
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up sccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
+          key: android-arm64-${{ github.ref_name }}
+          restore-keys: |
+            android-arm64-
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build zip
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+
+      - name: Configure CMake
+        run: |
+          cmake --preset android-arm64 \
+            -DCMAKE_TOOLCHAIN_FILE="${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build and install
+        run: |
+          cmake --build out/build/android-arm64 --config Release --target install --parallel
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          v=""
+          if [ -f out/build/android-arm64/include/rex/version.h ]; then
+            v=$(sed -nE 's/^#define REXGLUE_VERSION_STRING "([^"]+)".*/\1/p' out/build/android-arm64/include/rex/version.h)
+          fi
+          if [ -z "$v" ]; then
+            v="${{ github.ref_name }}"
+          fi
+          echo "v=${v}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${v}"
+
+      - name: Package SDK
+        shell: bash
+        run: |
+          cd out/install
+          zip -r "rexglue-sdk-${{ steps.version.outputs.v }}-android-arm64.zip" android-arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rexglue-sdk-android-arm64
+          path: out/install/rexglue-sdk-*-android-arm64.zip
+          retention-days: 14
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/install/rexglue-sdk-*-android-arm64.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
