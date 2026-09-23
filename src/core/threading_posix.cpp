@@ -32,6 +32,10 @@ static_assert(REX_PLATFORM_ANDROID, "This file is Android/POSIX-only");
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if REX_PLATFORM_ANDROID
+#include <sys/prctl.h>
+#include <sys/resource.h>
+#endif
 
 #include <rex/assert.h>
 #include <rex/chrono/chrono_steady_cast.h>
@@ -137,16 +141,28 @@ void EnableAffinityConfiguration() {}
 // uint64_t ticks() { return mach_absolute_time(); }
 
 uint32_t current_thread_system_id() {
+#if REX_PLATFORM_ANDROID
+  return static_cast<uint32_t>(gettid());
+#else
   return static_cast<uint32_t>(syscall(SYS_gettid));
+#endif
 }
 
 void MaybeYield() {
   sched_yield();
+#if defined(__aarch64__)
+  asm volatile("dmb ish" ::: "memory");
+#else
   __sync_synchronize();
+#endif
 }
 
 void SyncMemory() {
+#if defined(__aarch64__)
+  asm volatile("dmb ish" ::: "memory");
+#else
   __sync_synchronize();
+#endif
 }
 
 void Sleep(std::chrono::microseconds duration) {
@@ -209,6 +225,11 @@ bool SetTlsValue(TlsHandle handle, uintptr_t value) {
 
 class PosixConditionBase {
  public:
+  struct WaitListener {
+    std::mutex* mutex;
+    std::condition_variable* cond;
+  };
+
   PosixConditionBase() {
 #if REX_PLATFORM_LINUX && !REX_PLATFORM_ANDROID
     // Use robust mutexes so waits can recover if owner thread terminates.
@@ -226,6 +247,27 @@ class PosixConditionBase {
 
   virtual ~PosixConditionBase() = default;
   virtual bool Signal() = 0;
+
+  void AddListener(WaitListener* listener) {
+    std::lock_guard<std::mutex> lock(listener_mutex_);
+    listeners_.push_back(listener);
+  }
+
+  void RemoveListener(WaitListener* listener) {
+    std::lock_guard<std::mutex> lock(listener_mutex_);
+    auto it = std::find(listeners_.begin(), listeners_.end(), listener);
+    if (it != listeners_.end()) {
+      listeners_.erase(it);
+    }
+  }
+
+  void NotifyListeners() {
+    std::lock_guard<std::mutex> lock(listener_mutex_);
+    for (auto* l : listeners_) {
+      std::lock_guard<std::mutex> l_lock(*l->mutex);
+      l->cond->notify_all();
+    }
+  }
 
   WaitResult Wait(std::chrono::milliseconds timeout) {
     bool executed;
@@ -270,6 +312,24 @@ class PosixConditionBase {
       return std::make_pair(result, 0);
     }
 
+    std::mutex wait_mutex;
+    std::condition_variable wait_cond;
+    WaitListener listener{&wait_mutex, &wait_cond};
+
+    for (auto* h : handles) {
+      h->AddListener(&listener);
+    }
+
+    struct ListenerCleanup {
+      const std::vector<PosixConditionBase*>& h_list;
+      WaitListener* l;
+      ~ListenerCleanup() {
+        for (auto* h : h_list) {
+          h->RemoveListener(l);
+        }
+      }
+    } cleanup{handles, &listener};
+
     auto start_time = std::chrono::steady_clock::now();
     auto end_time = (timeout == std::chrono::milliseconds::max())
                         ? std::chrono::steady_clock::time_point::max()
@@ -307,7 +367,7 @@ class PosixConditionBase {
 
       if (!all_locked) {
         locks.clear();
-        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
         continue;
       }
 
@@ -351,12 +411,12 @@ class PosixConditionBase {
         return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
       }
 
+      std::unique_lock<std::mutex> wait_lock(wait_mutex);
       if (timeout == std::chrono::milliseconds::max()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        wait_cond.wait_for(wait_lock, std::chrono::milliseconds(200));
       } else {
         auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
-        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
-        std::this_thread::sleep_for(sleep_time);
+        wait_cond.wait_for(wait_lock, std::min(remaining, std::chrono::milliseconds(200)));
       }
     }
   }
@@ -370,6 +430,8 @@ class PosixConditionBase {
   inline virtual void post_execution() = 0;
   std::condition_variable cond_;
   std::mutex mutex_;
+  std::mutex listener_mutex_;
+  std::vector<WaitListener*> listeners_;
 };
 
 // There really is no native POSIX handle for a single wait/signal construct
@@ -387,9 +449,12 @@ class PosixCondition<Event> : public PosixConditionBase {
   virtual ~PosixCondition() = default;
 
   bool Signal() override {
-    auto lock = std::unique_lock<std::mutex>(mutex_);
-    signal_ = true;
-    cond_.notify_all();
+    {
+      auto lock = std::unique_lock<std::mutex>(mutex_);
+      signal_ = true;
+      cond_.notify_all();
+    }
+    NotifyListeners();
     return true;
   }
 
@@ -418,15 +483,18 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
   bool Signal() override { return Release(1, nullptr); }
 
   bool Release(uint32_t release_count, int* out_previous_count) {
-    auto lock = std::unique_lock<std::mutex>(mutex_);
-    if (release_count > maximum_count_ - count_) {
-      return false;
+    {
+      auto lock = std::unique_lock<std::mutex>(mutex_);
+      if (release_count > maximum_count_ - count_) {
+        return false;
+      }
+      if (out_previous_count) {
+        *out_previous_count = count_;
+      }
+      count_ += release_count;
+      cond_.notify_all();
     }
-    if (out_previous_count) {
-      *out_previous_count = count_;
-    }
-    count_ += release_count;
-    cond_.notify_all();
+    NotifyListeners();
     return true;
   }
 
@@ -454,12 +522,15 @@ class PosixCondition<Mutant> : public PosixConditionBase {
 
   bool Release() {
     if (owner_ == std::this_thread::get_id() && count_ > 0) {
-      auto lock = std::unique_lock<std::mutex>(mutex_);
-      --count_;
-      // Free to be acquired by another thread
-      if (count_ == 0) {
-        cond_.notify_all();
+      {
+        auto lock = std::unique_lock<std::mutex>(mutex_);
+        --count_;
+        // Free to be acquired by another thread
+        if (count_ == 0) {
+          cond_.notify_all();
+        }
       }
+      NotifyListeners();
       return true;
     }
     return false;
@@ -705,13 +776,20 @@ class PosixCondition<Thread> : public PosixConditionBase {
         CPU_SET(i, &cpu_set);
       }
     }
-    if (sched_setaffinity(pthread_gettid_np(thread_), sizeof(cpu_set_t), &cpu_set) != 0) {
-      assert_always();
+    pid_t tid = pthread_gettid_np(thread_);
+    if (sched_setaffinity(tid, sizeof(cpu_set_t), &cpu_set) != 0) {
+      REXSYS_WARN("sched_setaffinity failed for tid {} (errno: {})", tid, errno);
     }
   }
 
   int priority() {
     WaitStarted();
+#if REX_PLATFORM_ANDROID
+    pid_t tid = pthread_gettid_np(thread_);
+    errno = 0;
+    int nice = getpriority(PRIO_PROCESS, tid);
+    return nice;
+#else
     int policy;
     sched_param param{};
     int ret = pthread_getschedparam(thread_, &policy, &param);
@@ -720,10 +798,37 @@ class PosixCondition<Thread> : public PosixConditionBase {
     }
 
     return param.sched_priority;
+#endif
   }
 
   void set_priority(int new_priority) {
     WaitStarted();
+#if REX_PLATFORM_ANDROID
+    // In Android Linux CFS, nice values range from -20 (highest priority) to 19 (idle).
+    // Non-root applications cannot use SCHED_FIFO, but can adjust nice priority.
+    // Map rex thread priority to Linux nice value:
+    // kHighest (32)      -> -10
+    // kAboveNormal (24)  -> -5
+    // kNormal (16)       -> 0
+    // kBelowNormal (8)   -> 5
+    // kLowest (1)        -> 10
+    int nice = 0;
+    if (new_priority >= ThreadPriority::kHighest) {
+      nice = -10;
+    } else if (new_priority >= ThreadPriority::kAboveNormal) {
+      nice = -5;
+    } else if (new_priority <= ThreadPriority::kLowest) {
+      nice = 10;
+    } else if (new_priority <= ThreadPriority::kBelowNormal) {
+      nice = 5;
+    } else {
+      nice = 0;
+    }
+    pid_t tid = pthread_gettid_np(thread_);
+    if (tid > 0) {
+      setpriority(PRIO_PROCESS, tid, nice);
+    }
+#else
     sched_param param{};
     param.sched_priority = new_priority;
     int result = pthread_setschedparam(thread_, SCHED_FIFO, &param);
@@ -740,6 +845,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
           break;
       }
     }
+#endif
   }
 
   void QueueUserCallback(std::function<void()> callback) {
@@ -1262,7 +1368,10 @@ class PosixThread : public PosixConditionHandle<Thread> {
 thread_local PosixThread* current_thread_ = nullptr;
 
 void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
-#if !REX_PLATFORM_ANDROID
+#if REX_PLATFORM_ANDROID
+  // Configure high-resolution timer slack (1ns) to eliminate 50ms default Linux kernel delay
+  prctl(PR_SET_TIMERSLACK, 1);
+#else
   if (pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, nullptr) != 0) {
     assert_always();
   }

@@ -1300,11 +1300,13 @@ Presenter::PaintMode Presenter::GetDesiredPaintModeFromUIThread(bool is_paintabl
   if (!REXCVAR_GET(host_present_from_non_ui_thread)) {
     return PaintMode::kUIThreadOnRequest;
   }
+#if !REX_PLATFORM_ANDROID
   if (surface_paint_connection_has_implicit_vsync_) {
     // Don't be causing host vertical sync CPU waits in the thread generating
     // the guest output.
     return PaintMode::kUIThreadOnRequest;
   }
+#endif
   if (!ui_drawers_.empty()) {
     // The UI can be drawn only by the UI thread, and it needs to be drawn -
     // paint in the UI thread.

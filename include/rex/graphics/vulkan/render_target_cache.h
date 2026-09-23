@@ -115,6 +115,7 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
   RenderPassKey last_update_render_pass_key() const { return last_update_render_pass_key_; }
   VkRenderPass last_update_render_pass() const { return last_update_render_pass_; }
   const Framebuffer* last_update_framebuffer() const { return last_update_framebuffer_; }
+  bool last_update_stencil_enable() const { return last_update_stencil_enable_; }
   void GetLastUpdateRenderingAttachments(VkRenderingAttachmentInfo* color_attachments,
                                          uint32_t* color_attachment_count_out,
                                          VkRenderingAttachmentInfo* depth_attachment,
@@ -280,6 +281,7 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
   const RenderTarget* const*
       last_update_framebuffer_attachments_[1 + xenos::kMaxColorRenderTargets] = {};
   const Framebuffer* last_update_framebuffer_ = VK_NULL_HANDLE;
+  bool last_update_stencil_enable_ = false;
 
   // For host render targets.
 

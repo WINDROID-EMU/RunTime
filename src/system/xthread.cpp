@@ -853,9 +853,13 @@ void XThread::SetPriority(int32_t increment) {
   } else {
     target_priority = rex::thread::ThreadPriority::kNormal;
   }
+#if REX_PLATFORM_ANDROID
+  thread_->set_priority(target_priority);
+#else
   if (!REXCVAR_GET(ignore_thread_priorities)) {
     thread_->set_priority(target_priority);
   }
+#endif
 }
 
 void XThread::SetAffinity(uint32_t affinity) {
@@ -894,6 +898,32 @@ void XThread::SetActiveCpu(uint8_t cpu_index) {
     pcr.prcb_data.current_cpu = cpu_index;
   }
 
+#if REX_PLATFORM_ANDROID
+  // On Android big.LITTLE / DynamIQ SoCs (e.g. Snapdragon 870: Cores 0..3 A55 Little,
+  // Cores 4..6 A77 Big, Core 7 A77 Prime):
+  // Never let guest emulation threads run on the power-saving LITTLE cores (0..3)!
+  // Blindly doing (1 << cpu_index) pins guest CPU 0 (Main game loop) to Core 0 (A55 @ 1.8GHz).
+  // Instead, pin guest threads to the high-performance cores (Cores 4..7):
+  uint32_t num_cpus = rex::thread::logical_processor_count();
+  if (num_cpus >= 8) {
+    // Cores 4..7 (0xF0ULL):
+    // For CPU 0 (Main thread): prioritize Prime core (7) and Big core (6)
+    // For other threads (workers, audio): allow floating across Big + Prime cores (4..7)
+    uint64_t mask = 0xF0ULL;
+    if (cpu_index == 0) {
+      mask = (1ULL << 7) | (1ULL << 6);
+    }
+    thread_->set_affinity_mask(mask);
+    thread_->set_priority(rex::thread::ThreadPriority::kAboveNormal);
+  } else if (num_cpus > 4) {
+    uint64_t mask = 0;
+    for (uint32_t i = num_cpus / 2; i < num_cpus; ++i) {
+      mask |= (1ULL << i);
+    }
+    thread_->set_affinity_mask(mask);
+    thread_->set_priority(rex::thread::ThreadPriority::kAboveNormal);
+  }
+#else
   if (rex::thread::logical_processor_count() >= 6) {
     if (!REXCVAR_GET(ignore_thread_affinities)) {
       thread_->set_affinity_mask(uint64_t(1) << cpu_index);
@@ -901,6 +931,7 @@ void XThread::SetActiveCpu(uint8_t cpu_index) {
   } else {
     REXSYS_WARN("Too few processor cores - scheduling will be wonky");
   }
+#endif
 }
 
 bool XThread::GetTLSValue(uint32_t slot, uint32_t* value_out) {

@@ -20,6 +20,11 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <chrono>
+
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
 
 #include <SPIRV/GlslangToSpv.h>
 #include <glslang/Public/ShaderLang.h>
@@ -2278,6 +2283,16 @@ void VulkanCommandProcessor::OnGammaRampPWLValueWritten() {
 void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                                        uint32_t frontbuffer_height) {
   SCOPE_profile_cpu_f("gpu");
+  struct ScopedSwapCpuTimer {
+    GpuTelemetryStats& stats;
+    std::chrono::steady_clock::time_point start;
+    ScopedSwapCpuTimer(GpuTelemetryStats& s) : stats(s), start(std::chrono::steady_clock::now()) {}
+    ~ScopedSwapCpuTimer() {
+      stats.swap_cpu_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start).count();
+    }
+  } scoped_swap_timer(telemetry_current_frame_);
+
   vertex_buffers_in_sync_[0] = 0;
   vertex_buffers_in_sync_[1] = 0;
 
@@ -2413,6 +2428,10 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
   kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
   uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
+
+  if (!guest_output_width || !guest_output_height) {
+    return;
+  }
 
   presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
@@ -2933,6 +2952,59 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.
   EndSubmission(true);
+
+  // Accumulate telemetry
+  telemetry_window_.draws += telemetry_current_frame_.draws + telemetry_current_frame_.draws_indexed;
+  telemetry_window_.draws_indexed += telemetry_current_frame_.draws_indexed;
+  telemetry_window_.vertices += telemetry_current_frame_.vertices;
+  telemetry_window_.resolves += telemetry_current_frame_.resolves;
+  telemetry_window_.render_passes += telemetry_current_frame_.render_passes;
+  telemetry_window_.pipeline_binds += telemetry_current_frame_.pipeline_binds;
+  telemetry_window_.fence_wait_ns += telemetry_current_frame_.fence_wait_ns;
+  telemetry_window_.draw_cpu_ns += telemetry_current_frame_.draw_cpu_ns;
+  telemetry_window_.resolve_cpu_ns += telemetry_current_frame_.resolve_cpu_ns;
+  telemetry_window_.queue_submit_ns += telemetry_current_frame_.queue_submit_ns;
+  telemetry_window_.swap_cpu_ns += telemetry_current_frame_.swap_cpu_ns;
+
+  telemetry_current_frame_ = {};
+  ++telemetry_window_frames_;
+
+  if (telemetry_window_frames_ == 1) {
+    telemetry_window_start_ = std::chrono::steady_clock::now();
+  } else {
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - telemetry_window_start_).count();
+    if (elapsed_ms >= 1000) {
+      double fps = (double)telemetry_window_frames_ * 1000.0 / (double)elapsed_ms;
+      double n_frames = (double)telemetry_window_frames_;
+      double avg_draws = (double)telemetry_window_.draws / n_frames;
+      double avg_vtx = ((double)telemetry_window_.vertices / n_frames) / 1000.0;
+      double avg_resolves = (double)telemetry_window_.resolves / n_frames;
+      double avg_passes = (double)telemetry_window_.render_passes / n_frames;
+      double avg_binds = (double)telemetry_window_.pipeline_binds / n_frames;
+      double avg_fence_wait_ms = ((double)telemetry_window_.fence_wait_ns / 1000000.0) / n_frames;
+      double avg_draw_ms = ((double)telemetry_window_.draw_cpu_ns / 1000000.0) / n_frames;
+      double avg_resolve_ms = ((double)telemetry_window_.resolve_cpu_ns / 1000000.0) / n_frames;
+      double avg_submit_ms = ((double)telemetry_window_.queue_submit_ns / 1000000.0) / n_frames;
+      double avg_swap_ms = ((double)telemetry_window_.swap_cpu_ns / 1000000.0) / n_frames;
+
+#if defined(__ANDROID__)
+      __android_log_print(ANDROID_LOG_INFO, "REX_GPU_PROF",
+          "[GPU_TELEMETRY] FPS: %.1f | FenceWait: %.2fms | CPU(Draw: %.2fms, Copy: %.2fms, Sub: %.2fms, Swap: %.2fms) | Draws/f: %.0f (Vtx: %.1fk) | Resolves/f: %.0f | Passes/f: %.0f | PipeBinds/f: %.0f",
+          fps, avg_fence_wait_ms, avg_draw_ms, avg_resolve_ms, avg_submit_ms, avg_swap_ms,
+          avg_draws, avg_vtx, avg_resolves, avg_passes, avg_binds);
+#endif
+      REXGPU_INFO(
+          "[GPU_TELEMETRY] FPS: {:.1f} | FenceWait: {:.2f}ms | CPU(Draw: {:.2f}ms, Copy: {:.2f}ms, Sub: {:.2f}ms, Swap: {:.2f}ms) | Draws/f: {:.0f} (Vtx: {:.1f}k) | Resolves/f: {:.0f} | Passes/f: {:.0f} | PipeBinds/f: {:.0f}",
+          fps, avg_fence_wait_ms, avg_draw_ms, avg_resolve_ms, avg_submit_ms, avg_swap_ms,
+          avg_draws, avg_vtx, avg_resolves, avg_passes, avg_binds);
+
+      telemetry_window_ = {};
+      telemetry_window_frames_ = 0;
+      telemetry_window_start_ = now;
+    }
+  }
 }
 
 bool VulkanCommandProcessor::PushBufferMemoryBarrier(
@@ -3101,9 +3173,11 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
   bool use_dynamic_rendering =
       REXCVAR_GET(vulkan_dynamic_rendering) && vulkan_device->properties().dynamicRendering;
 
+  bool stencil_enable = render_target_cache_->last_update_stencil_enable();
   if (use_dynamic_rendering) {
     if (in_render_pass_ && current_framebuffer_ == framebuffer &&
-        current_render_pass_ == VK_NULL_HANDLE) {
+        current_render_pass_ == VK_NULL_HANDLE &&
+        current_stencil_enable_ == stencil_enable) {
       return;
     }
   } else {
@@ -3164,7 +3238,9 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
     deferred_command_buffer_.CmdVkBeginRenderPass(&render_pass_begin_info,
                                                   VK_SUBPASS_CONTENTS_INLINE);
   }
+  current_stencil_enable_ = stencil_enable;
   in_render_pass_ = true;
+  ++telemetry_current_frame_.render_passes;
 }
 
 void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
@@ -3257,6 +3333,7 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
                                                   VK_SUBPASS_CONTENTS_INLINE);
   }
   in_render_pass_ = true;
+  ++telemetry_current_frame_.render_passes;
 }
 
 void VulkanCommandProcessor::EndRenderPass() {
@@ -3272,6 +3349,7 @@ void VulkanCommandProcessor::EndRenderPass() {
   current_render_pass_ = VK_NULL_HANDLE;
   current_framebuffer_ = nullptr;
   in_render_pass_ = false;
+  current_stencil_enable_ = false;
 }
 
 VkDescriptorSet VulkanCommandProcessor::AllocateSingleTransientDescriptor(
@@ -3600,6 +3678,16 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
+  struct ScopedDrawCpuTimer {
+    GpuTelemetryStats& stats;
+    std::chrono::steady_clock::time_point start;
+    ScopedDrawCpuTimer(GpuTelemetryStats& s) : stats(s), start(std::chrono::steady_clock::now()) {}
+    ~ScopedDrawCpuTimer() {
+      stats.draw_cpu_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start).count();
+    }
+  } scoped_draw_timer(telemetry_current_frame_);
+
   const RegisterFile& regs = *register_file_;
   (void)index_buffer_info;
   auto draw_fail = [&](const char* stage) {
@@ -3878,6 +3966,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     deferred_command_buffer_.CmdVkBindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     current_guest_graphics_pipeline_ = pipeline;
     current_external_graphics_pipeline_ = VK_NULL_HANDLE;
+    ++telemetry_current_frame_.pipeline_binds;
   }
 
   // Update the graphics pipeline, and if the new graphics pipeline has a
@@ -4126,6 +4215,8 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
           PrimitiveProcessor::ProcessedIndexBufferType::kNone ||
       shader_32bit_index_dma) {
     deferred_command_buffer_.CmdVkDraw(primitive_processing_result.host_draw_vertex_count, 1, 0, 0);
+    ++telemetry_current_frame_.draws;
+    telemetry_current_frame_.vertices += primitive_processing_result.host_draw_vertex_count;
   } else {
     std::pair<VkBuffer, VkDeviceSize> index_buffer;
     switch (primitive_processing_result.index_buffer_type) {
@@ -4158,6 +4249,8 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
             : VK_INDEX_TYPE_UINT32);
     deferred_command_buffer_.CmdVkDrawIndexed(primitive_processing_result.host_draw_vertex_count, 1,
                                               0, 0, 0);
+    ++telemetry_current_frame_.draws_indexed;
+    telemetry_current_frame_.vertices += primitive_processing_result.host_draw_vertex_count;
   }
 
   // Invalidate textures in memexported memory and watch for changes.
@@ -4392,6 +4485,17 @@ bool VulkanCommandProcessor::IssueCopy() {
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
+  ++telemetry_current_frame_.resolves;
+  struct ScopedCopyCpuTimer {
+    GpuTelemetryStats& stats;
+    std::chrono::steady_clock::time_point start;
+    ScopedCopyCpuTimer(GpuTelemetryStats& s) : stats(s), start(std::chrono::steady_clock::now()) {}
+    ~ScopedCopyCpuTimer() {
+      stats.resolve_cpu_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - start).count();
+    }
+  } scoped_copy_timer(telemetry_current_frame_);
+
   if (!BeginSubmission(true)) {
     return false;
   }
@@ -4429,6 +4533,16 @@ bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
   if (readback_mode == ReadbackResolveMode::kDisabled) {
     return true;
   }
+
+#if REX_PLATFORM_ANDROID
+  // On mobile GPUs (Adreno), readback resolve of full-framebuffers (1280x720 = 3.6MB)
+  // causes severe memory bus saturation and tile cache flushes.
+  // Games (like NFS:MW) only read back small luminance downsamples (<= 256KB) for
+  // HDR tonemapping/auto-exposure calculation. Full-frame color/depth resolves are never read by CPU.
+  if (written_length > 256 * 1024) {
+    return true;
+  }
+#endif
 
   auto ensure_readback_slot = [&](ReadbackBuffer& readback, uint32_t index, uint32_t size) -> bool {
     if (readback.buffers[index] != VK_NULL_HANDLE && size <= readback.sizes[index] &&
@@ -4668,11 +4782,18 @@ bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
   if (use_delayed_sync && (readback.buffers[read_index] == VK_NULL_HANDLE ||
                            written_length > readback.sizes[read_index] ||
                            readback.mapped_data[read_index] == nullptr)) {
+#if REX_PLATFORM_ANDROID
+    // On Android mobile GPU, do NOT stall the entire GPU pipeline with AwaitAllQueueOperationsCompletion()!
+    // Skip host copy for this frame; subsequent frames will have double-buffered data ready.
+    readback.current_index = 1 - readback.current_index;
+    return true;
+#else
     is_cache_miss = true;
     read_index = write_index;
     if (!AwaitAllQueueOperationsCompletion()) {
       return true;
     }
+#endif
   }
 
   bool should_copy = (readback_mode == ReadbackResolveMode::kSome) ? is_cache_miss : true;
@@ -4976,9 +5097,12 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(uint64_t await_su
     // defined by vkQueueSubmit additionally include in the first
     // synchronization scope all commands that occur earlier in submission
     // order."
+    auto wait_start = std::chrono::steady_clock::now();
     VkResult wait_result =
         dfn.vkWaitForFences(device, uint32_t(await_submission - submission_completed_),
                             submissions_in_flight_fences_.data(), VK_TRUE, UINT64_MAX);
+    telemetry_current_frame_.fence_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - wait_start).count();
     if (wait_result == VK_SUCCESS) {
       fences_awaited += await_submission - submission_completed_;
     } else {
@@ -5421,9 +5545,12 @@ bool VulkanCommandProcessor::EndSubmission(bool is_swap) {
     }
     VkResult submit_result;
     {
+      auto submit_start = std::chrono::steady_clock::now();
       ui::vulkan::VulkanDevice::Queue::Acquisition queue_acquisition =
           vulkan_device->AcquireQueue(vulkan_device->queue_family_graphics_compute(), 0);
       submit_result = dfn.vkQueueSubmit(queue_acquisition.queue(), 1, &submit_info, fence);
+      telemetry_current_frame_.queue_submit_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - submit_start).count();
     }
     if (submit_result != VK_SUCCESS) {
       REXGPU_ERROR("Failed to submit a Vulkan command buffer");

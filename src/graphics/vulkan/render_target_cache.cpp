@@ -964,6 +964,7 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
   std::memset(last_update_framebuffer_attachments_, 0,
               sizeof(last_update_framebuffer_attachments_));
   last_update_framebuffer_ = VK_NULL_HANDLE;
+  last_update_stencil_enable_ = false;
 
   InitializeCommon();
   return true;
@@ -1465,6 +1466,7 @@ bool VulkanRenderTargetCache::Update(bool is_rasterization_done,
       std::memcpy(last_update_framebuffer_attachments_, depth_and_color_render_targets,
                   sizeof(last_update_framebuffer_attachments_));
       last_update_framebuffer_ = framebuffer;
+      last_update_stencil_enable_ = normalized_depth_control.stencil_enable != 0;
 
       // Transition the used render targets.
       for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
@@ -1533,8 +1535,13 @@ void VulkanRenderTargetCache::GetLastUpdateRenderingAttachments(
     depth_attachment->resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     depth_attachment->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     depth_attachment->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depth_attachment->clearValue = {};
-    *stencil_attachment = *depth_attachment;
+    if (last_update_stencil_enable_) {
+      *stencil_attachment = *depth_attachment;
+    } else {
+      *stencil_attachment = *depth_attachment;
+      stencil_attachment->loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+      stencil_attachment->storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    }
   }
 
   uint32_t color_attachment_count = 0;
