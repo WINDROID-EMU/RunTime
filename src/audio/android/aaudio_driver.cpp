@@ -23,7 +23,11 @@
 namespace rex::audio::android {
 
 AAudioDriver::AAudioDriver(memory::Memory* memory, rex::thread::Semaphore* semaphore)
-    : AudioDriver(memory), semaphore_(semaphore) {}
+    : AudioDriver(memory), semaphore_(semaphore) {
+  ring_buffer_ = std::make_unique<AudioRingFrame[]>(kRingBufferCapacity);
+  write_index_.store(0, std::memory_order_relaxed);
+  read_index_.store(0, std::memory_order_relaxed);
+}
 
 AAudioDriver::~AAudioDriver() {
   Shutdown();
@@ -42,13 +46,19 @@ bool AAudioDriver::Initialize() {
   AAudioStreamBuilder_setChannelCount(builder, channel_count_);
   AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
   AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-  AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+  // Try EXCLUSIVE MMAP hardware path first for ultra-low latency (<3ms)
+  AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
   AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
   AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_MUSIC);
   AAudioStreamBuilder_setDataCallback(builder, DataCallback, this);
   AAudioStreamBuilder_setErrorCallback(builder, ErrorCallback, this);
 
   result = AAudioStreamBuilder_openStream(builder, &aaudio_stream_);
+  if (result != AAUDIO_OK || !aaudio_stream_) {
+    // Fallback to SHARED mode if device does not grant exclusive access
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+    result = AAudioStreamBuilder_openStream(builder, &aaudio_stream_);
+  }
   AAudioStreamBuilder_delete(builder);
 
   if (result != AAUDIO_OK || !aaudio_stream_) {
@@ -56,15 +66,22 @@ bool AAudioDriver::Initialize() {
     return false;
   }
 
+  // Tune buffer size to double burst size for optimum DSP hardware sync
+  int32_t burst_frames = AAudioStream_getFramesPerBurst(aaudio_stream_);
+  if (burst_frames > 0) {
+    AAudioStream_setBufferSizeInFrames(aaudio_stream_, burst_frames * 2);
+  }
+
   channel_count_ = AAudioStream_getChannelCount(aaudio_stream_);
   int32_t sample_rate = AAudioStream_getSampleRate(aaudio_stream_);
   aaudio_sharing_mode_t sharing_mode = AAudioStream_getSharingMode(aaudio_stream_);
   aaudio_performance_mode_t perf_mode = AAudioStream_getPerformanceMode(aaudio_stream_);
 
-  REXAPU_INFO("AAudio endpoint opened: {} ch, {} Hz, sharing={}, perf={}",
+  REXAPU_INFO("AAudio endpoint opened: {} ch, {} Hz, sharing={}, perf={}, burst={}",
               channel_count_, sample_rate,
               sharing_mode == AAUDIO_SHARING_MODE_EXCLUSIVE ? "EXCLUSIVE(MMAP)" : "SHARED",
-              perf_mode == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY ? "LOW_LATENCY" : "NORMAL");
+              perf_mode == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY ? "LOW_LATENCY" : "NORMAL",
+              burst_frames);
 
   result = AAudioStream_requestStart(aaudio_stream_);
   if (result != AAUDIO_OK) {
@@ -79,24 +96,21 @@ bool AAudioDriver::Initialize() {
 
 void AAudioDriver::SubmitFrame(uint32_t frame_ptr) {
   const auto input_frame = memory_->TranslateVirtual<float*>(frame_ptr);
-  float* output_frame = nullptr;
-  {
-    std::unique_lock<std::mutex> guard(frames_mutex_);
-    if (frames_unused_.empty()) {
-      output_frame = new float[kGuestFrameSamples];
-    } else {
-      output_frame = frames_unused_.top();
-      frames_unused_.pop();
-    }
+  if (!ring_buffer_) return;
+
+  const size_t current_write = write_index_.load(std::memory_order_relaxed);
+  const size_t current_read = read_index_.load(std::memory_order_acquire);
+
+  if ((current_write - current_read) >= kRingBufferCapacity) {
+    // Ring buffer overflow: advance read to keep audio fresh and avoid drift
+    read_index_.store(current_read + 1, std::memory_order_release);
   }
 
-  std::memcpy(output_frame, input_frame, kGuestFrameSize);
+  const size_t slot = current_write % kRingBufferCapacity;
+  std::memcpy(ring_buffer_[slot].samples, input_frame, kGuestFrameSize);
+  write_index_.store(current_write + 1, std::memory_order_release);
 
-  {
-    std::unique_lock<std::mutex> guard(frames_mutex_);
-    frames_queued_.push(output_frame);
-    PROFILE_BUFFER_QUEUE_DEPTH(static_cast<int64_t>(frames_queued_.size()));
-  }
+  PROFILE_BUFFER_QUEUE_DEPTH(static_cast<int64_t>(current_write - current_read));
 }
 
 void AAudioDriver::Shutdown() {
@@ -106,15 +120,10 @@ void AAudioDriver::Shutdown() {
     aaudio_stream_ = nullptr;
   }
 
-  std::unique_lock<std::mutex> guard(frames_mutex_);
-  while (!frames_unused_.empty()) {
-    delete[] frames_unused_.top();
-    frames_unused_.pop();
-  }
-  while (!frames_queued_.empty()) {
-    delete[] frames_queued_.front();
-    frames_queued_.pop();
-  }
+  write_index_.store(0, std::memory_order_release);
+  read_index_.store(0, std::memory_order_release);
+  leftover_buffer_.clear();
+  leftover_offset_ = 0;
 }
 
 aaudio_data_callback_result_t AAudioDriver::DataCallback(
@@ -156,12 +165,12 @@ aaudio_data_callback_result_t AAudioDriver::DataCallback(
 
   while (frames_needed > 0) {
     float* guest_buffer = nullptr;
-    {
-      std::unique_lock<std::mutex> guard(driver->frames_mutex_);
-      if (!driver->frames_queued_.empty()) {
-        guest_buffer = driver->frames_queued_.front();
-        driver->frames_queued_.pop();
-      }
+    const size_t current_read = driver->read_index_.load(std::memory_order_relaxed);
+    const size_t current_write = driver->write_index_.load(std::memory_order_acquire);
+
+    if (current_read < current_write) {
+      const size_t slot = current_read % kRingBufferCapacity;
+      guest_buffer = driver->ring_buffer_[slot].samples;
     }
 
     if (!guest_buffer) {
@@ -180,11 +189,11 @@ aaudio_data_callback_result_t AAudioDriver::DataCallback(
           converted_frame, guest_buffer, kChannelSamples, mix, gain);
     }
 
-    {
-      std::unique_lock<std::mutex> guard(driver->frames_mutex_);
-      driver->frames_unused_.push(guest_buffer);
+    // Advance consumer pointer lock-free
+    driver->read_index_.store(current_read + 1, std::memory_order_release);
+    if (driver->semaphore_) {
+      driver->semaphore_->Release(1, nullptr);
     }
-    driver->semaphore_->Release(1, nullptr);
 
     int32_t frames_to_copy = std::min<int32_t>(frames_needed, kChannelSamples);
     std::memcpy(out_samples, converted_frame, frames_to_copy * channels * sizeof(float));

@@ -50,15 +50,14 @@ class AndroidInputDriver : public InputDriver {
  private:
   static AndroidInputDriver* instance_;
 
-  std::mutex state_mutex_;
-  uint32_t packet_number_ = 0;
-  uint16_t buttons_ = 0;
-  uint8_t left_trigger_ = 0;
-  uint8_t right_trigger_ = 0;
-  int16_t thumb_lx_ = 0;
-  int16_t thumb_ly_ = 0;
-  int16_t thumb_rx_ = 0;
-  int16_t thumb_ry_ = 0;
+  alignas(64) std::atomic<uint32_t> packet_number_{0};
+  std::atomic<uint16_t> buttons_{0};
+  std::atomic<uint8_t> left_trigger_{0};
+  std::atomic<uint8_t> right_trigger_{0};
+  std::atomic<int16_t> thumb_lx_{0};
+  std::atomic<int16_t> thumb_ly_{0};
+  std::atomic<int16_t> thumb_rx_{0};
+  std::atomic<int16_t> thumb_ry_{0};
 
   DeviceId device_id_ = static_cast<DeviceId>(1);
 };

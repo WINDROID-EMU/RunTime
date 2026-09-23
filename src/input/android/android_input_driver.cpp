@@ -46,15 +46,14 @@ X_RESULT AndroidInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_stat
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
 
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  out_state->packet_number = packet_number_;
-  out_state->gamepad.buttons = buttons_;
-  out_state->gamepad.left_trigger = left_trigger_;
-  out_state->gamepad.right_trigger = right_trigger_;
-  out_state->gamepad.thumb_lx = thumb_lx_;
-  out_state->gamepad.thumb_ly = thumb_ly_;
-  out_state->gamepad.thumb_rx = thumb_rx_;
-  out_state->gamepad.thumb_ry = thumb_ry_;
+  out_state->packet_number = packet_number_.load(std::memory_order_relaxed);
+  out_state->gamepad.buttons = buttons_.load(std::memory_order_acquire);
+  out_state->gamepad.left_trigger = left_trigger_.load(std::memory_order_relaxed);
+  out_state->gamepad.right_trigger = right_trigger_.load(std::memory_order_relaxed);
+  out_state->gamepad.thumb_lx = thumb_lx_.load(std::memory_order_relaxed);
+  out_state->gamepad.thumb_ly = thumb_ly_.load(std::memory_order_relaxed);
+  out_state->gamepad.thumb_rx = thumb_rx_.load(std::memory_order_relaxed);
+  out_state->gamepad.thumb_ry = thumb_ry_.load(std::memory_order_relaxed);
 
   return X_ERROR_SUCCESS;
 }
@@ -106,6 +105,12 @@ bool AndroidInputDriver::HandleAInputEvent(const AInputEvent* event) {
     return true;
   }
   if (event_type == AINPUT_EVENT_TYPE_MOTION) {
+    // High-rate historical touch/motion sampling (120Hz/240Hz screen touch)
+    size_t history_size = AMotionEvent_getHistorySize(event);
+    for (size_t h = 0; h < history_size; ++h) {
+      HandleMotionEvent(AMOTION_EVENT_AXIS_X, AMotionEvent_getHistoricalAxisValue(event, AMOTION_EVENT_AXIS_X, 0, h));
+      HandleMotionEvent(AMOTION_EVENT_AXIS_Y, AMotionEvent_getHistoricalAxisValue(event, AMOTION_EVENT_AXIS_Y, 0, h));
+    }
     HandleMotionEvent(AMOTION_EVENT_AXIS_X, AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_X, 0));
     HandleMotionEvent(AMOTION_EVENT_AXIS_Y, AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_Y, 0));
     HandleMotionEvent(AMOTION_EVENT_AXIS_Z, AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_Z, 0));
@@ -180,8 +185,7 @@ void AndroidInputDriver::HandleKeyEvent(int32_t action, int32_t key_code) {
 }
 
 void AndroidInputDriver::HandleMotionEvent(int32_t axis, float value) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  packet_number_++;
+  packet_number_.fetch_add(1, std::memory_order_relaxed);
 
   auto scale_thumb = [](float v) -> int16_t {
     float clamped = std::clamp(v, -1.0f, 1.0f);
@@ -197,45 +201,45 @@ void AndroidInputDriver::HandleMotionEvent(int32_t axis, float value) {
 
   switch (axis) {
     case AMOTION_EVENT_AXIS_X:
-      thumb_lx_ = scale_thumb(value);
+      thumb_lx_.store(scale_thumb(value), std::memory_order_release);
       break;
     case AMOTION_EVENT_AXIS_Y:
-      thumb_ly_ = scale_thumb(-value);  // Inverted: up is positive on Xbox
+      thumb_ly_.store(scale_thumb(-value), std::memory_order_release);  // Inverted: up is positive on Xbox
       break;
     case AMOTION_EVENT_AXIS_Z:
-      thumb_rx_ = scale_thumb(value);
+      thumb_rx_.store(scale_thumb(value), std::memory_order_release);
       break;
     case AMOTION_EVENT_AXIS_RZ:
-      thumb_ry_ = scale_thumb(-value);  // Inverted: up is positive on Xbox
+      thumb_ry_.store(scale_thumb(-value), std::memory_order_release);  // Inverted: up is positive on Xbox
       break;
     case AMOTION_EVENT_AXIS_LTRIGGER:
     case AMOTION_EVENT_AXIS_BRAKE:
-      left_trigger_ = scale_trigger(value);
+      left_trigger_.store(scale_trigger(value), std::memory_order_release);
       break;
     case AMOTION_EVENT_AXIS_RTRIGGER:
     case AMOTION_EVENT_AXIS_GAS:
-      right_trigger_ = scale_trigger(value);
+      right_trigger_.store(scale_trigger(value), std::memory_order_release);
       break;
     case AMOTION_EVENT_AXIS_HAT_X:
       if (value < -0.5f) {
-        buttons_ |= X_INPUT_GAMEPAD_DPAD_LEFT;
-        buttons_ &= ~X_INPUT_GAMEPAD_DPAD_RIGHT;
+        buttons_.fetch_or(X_INPUT_GAMEPAD_DPAD_LEFT, std::memory_order_relaxed);
+        buttons_.fetch_and(~X_INPUT_GAMEPAD_DPAD_RIGHT, std::memory_order_release);
       } else if (value > 0.5f) {
-        buttons_ |= X_INPUT_GAMEPAD_DPAD_RIGHT;
-        buttons_ &= ~X_INPUT_GAMEPAD_DPAD_LEFT;
+        buttons_.fetch_or(X_INPUT_GAMEPAD_DPAD_RIGHT, std::memory_order_relaxed);
+        buttons_.fetch_and(~X_INPUT_GAMEPAD_DPAD_LEFT, std::memory_order_release);
       } else {
-        buttons_ &= ~(X_INPUT_GAMEPAD_DPAD_LEFT | X_INPUT_GAMEPAD_DPAD_RIGHT);
+        buttons_.fetch_and(~(X_INPUT_GAMEPAD_DPAD_LEFT | X_INPUT_GAMEPAD_DPAD_RIGHT), std::memory_order_release);
       }
       break;
     case AMOTION_EVENT_AXIS_HAT_Y:
       if (value < -0.5f) {
-        buttons_ |= X_INPUT_GAMEPAD_DPAD_UP;
-        buttons_ &= ~X_INPUT_GAMEPAD_DPAD_DOWN;
+        buttons_.fetch_or(X_INPUT_GAMEPAD_DPAD_UP, std::memory_order_relaxed);
+        buttons_.fetch_and(~X_INPUT_GAMEPAD_DPAD_DOWN, std::memory_order_release);
       } else if (value > 0.5f) {
-        buttons_ |= X_INPUT_GAMEPAD_DPAD_DOWN;
-        buttons_ &= ~X_INPUT_GAMEPAD_DPAD_UP;
+        buttons_.fetch_or(X_INPUT_GAMEPAD_DPAD_DOWN, std::memory_order_relaxed);
+        buttons_.fetch_and(~X_INPUT_GAMEPAD_DPAD_UP, std::memory_order_release);
       } else {
-        buttons_ &= ~(X_INPUT_GAMEPAD_DPAD_UP | X_INPUT_GAMEPAD_DPAD_DOWN);
+        buttons_.fetch_and(~(X_INPUT_GAMEPAD_DPAD_UP | X_INPUT_GAMEPAD_DPAD_DOWN), std::memory_order_release);
       }
       break;
     default:
@@ -244,34 +248,31 @@ void AndroidInputDriver::HandleMotionEvent(int32_t axis, float value) {
 }
 
 void AndroidInputDriver::SetButtonState(uint16_t button_mask, bool pressed) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  packet_number_++;
+  packet_number_.fetch_add(1, std::memory_order_relaxed);
   if (pressed) {
-    buttons_ |= button_mask;
+    buttons_.fetch_or(button_mask, std::memory_order_release);
   } else {
-    buttons_ &= ~button_mask;
+    buttons_.fetch_and(~button_mask, std::memory_order_release);
   }
 }
 
 void AndroidInputDriver::SetTrigger(bool is_right, uint8_t value) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  packet_number_++;
+  packet_number_.fetch_add(1, std::memory_order_relaxed);
   if (is_right) {
-    right_trigger_ = value;
+    right_trigger_.store(value, std::memory_order_release);
   } else {
-    left_trigger_ = value;
+    left_trigger_.store(value, std::memory_order_release);
   }
 }
 
 void AndroidInputDriver::SetThumb(bool is_right, int16_t x, int16_t y) {
-  std::lock_guard<std::mutex> lock(state_mutex_);
-  packet_number_++;
+  packet_number_.fetch_add(1, std::memory_order_relaxed);
   if (is_right) {
-    thumb_rx_ = x;
-    thumb_ry_ = y;
+    thumb_rx_.store(x, std::memory_order_relaxed);
+    thumb_ry_.store(y, std::memory_order_release);
   } else {
-    thumb_lx_ = x;
-    thumb_ly_ = y;
+    thumb_lx_.store(x, std::memory_order_relaxed);
+    thumb_ly_.store(y, std::memory_order_release);
   }
 }
 

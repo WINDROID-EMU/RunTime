@@ -245,6 +245,11 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
 
   void* result = mmap(base_address, length, prot_initial, flags, -1, 0);
   if (result != MAP_FAILED) {
+#if defined(MADV_HUGEPAGE)
+    if (length >= 2 * 1024 * 1024) {
+      (void)madvise(result, length, MADV_HUGEPAGE);
+    }
+#endif
     return result;
   }
 #if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX
@@ -256,6 +261,11 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
     // Verify the entire range is mapped before using mprotect
     if (IsRangeFullyMapped(base_address, length)) {
       if (mprotect(base_address, length, static_cast<int>(prot_requested)) == 0) {
+#if defined(MADV_HUGEPAGE)
+        if (length >= 2 * 1024 * 1024) {
+          (void)madvise(base_address, length, MADV_HUGEPAGE);
+        }
+#endif
         return base_address;
       }
     }

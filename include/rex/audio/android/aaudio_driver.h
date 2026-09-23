@@ -42,10 +42,15 @@ class AAudioDriver : public AudioDriver {
   static constexpr uint32_t kChannelSamples = 256;
   static constexpr uint32_t kGuestFrameSamples = kGuestChannels * kChannelSamples;
   static constexpr uint32_t kGuestFrameSize = sizeof(float) * kGuestFrameSamples;
+  static constexpr size_t kRingBufferCapacity = 64;
 
-  std::queue<float*> frames_queued_ = {};
-  std::stack<float*> frames_unused_ = {};
-  std::mutex frames_mutex_ = {};
+  struct alignas(64) AudioRingFrame {
+    float samples[kGuestFrameSamples];
+  };
+
+  std::unique_ptr<AudioRingFrame[]> ring_buffer_;
+  alignas(64) std::atomic<size_t> write_index_{0};
+  alignas(64) std::atomic<size_t> read_index_{0};
 
   // Intermediate buffer for leftover frames when callback frame count != kChannelSamples
   std::vector<float> leftover_buffer_ = {};

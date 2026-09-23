@@ -108,6 +108,7 @@ void WindowAndroid::SetNativeWindow(ANativeWindow* window) {
     int32_t width = ANativeWindow_getWidth(native_window_);
     int32_t height = ANativeWindow_getHeight(native_window_);
     if (width > 0 && height > 0) {
+      ANativeWindow_setBuffersGeometry(native_window_, width, height, WINDOW_FORMAT_RGBA_8888);
       WindowDestructionReceiver destruction_receiver(this);
       OnActualSizeUpdate(uint32_t(width), uint32_t(height), destruction_receiver);
     }
