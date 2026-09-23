@@ -64,19 +64,38 @@ jobs:
         if: always()
         run: sccache --show-stats || true
 
-      - name: Read version
+      - name: Read version and metadata
         id: version
         shell: bash
         run: |
           v=""
+          floor_v=""
           if [ -f out/build/android-arm64/include/rex/version.h ]; then
             v=$(sed -nE 's/^#define REXGLUE_VERSION_STRING "([^"]+)".*/\1/p' out/build/android-arm64/include/rex/version.h)
+            floor_v=$(sed -nE 's/^#define REXGLUE_VERSION_FLOOR "([^"]+)".*/\1/p' out/build/android-arm64/include/rex/version.h)
           fi
           if [ -z "$v" ]; then
             v="${{ github.ref_name }}"
           fi
+          if [ -z "$floor_v" ]; then
+            floor_v="0.10.0"
+          fi
           echo "v=${v}" >> "$GITHUB_OUTPUT"
           echo "Resolved version: ${v}"
+
+          short_sha=$(git rev-parse --short HEAD)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag_name="${GITHUB_REF_NAME}"
+            release_title="Release ${tag_name}"
+            is_prerelease="false"
+          else
+            tag_name="v${floor_v}-${short_sha}"
+            release_title="Release v${floor_v} (${short_sha})"
+            is_prerelease="false"
+          fi
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "release_title=${release_title}" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
 
       - name: Package SDK
         shell: bash
@@ -92,10 +111,14 @@ jobs:
           retention-days: 14
 
       - name: Upload to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag_name }}
+          name: ${{ steps.version.outputs.release_title }}
           files: out/install/rexglue-sdk-*-android-arm64.zip
           generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
