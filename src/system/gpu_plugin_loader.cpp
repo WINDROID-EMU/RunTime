@@ -49,13 +49,19 @@ std::vector<platform::DynamicLibrary>& LoadedPlugins() {
 }  // namespace
 
 std::unique_ptr<IGraphicsSystem> LoadGpuPlugin(std::string_view name, std::string_view backend) {
-  auto path = rex::filesystem::GetExecutableFolder() / PluginFileName(name);
+  auto exe_folder = rex::filesystem::GetExecutableFolder();
+  auto path = exe_folder / PluginFileName(name);
   if (!std::filesystem::exists(path)) {
-    REXSYS_ERROR(
-        "GPU plugin '{}' not found at {}. Stage it next to the executable "
-        "(GPU_PLUGINS {} in rexglue_configure_target).",
-        name, path.string(), name);
-    return nullptr;
+    auto release_path = exe_folder / fmt::format("librexgpu-{}.so", name);
+    if (std::filesystem::exists(release_path)) {
+      path = release_path;
+    } else {
+      REXSYS_ERROR(
+          "GPU plugin '{}' not found at {}. Stage it next to the executable "
+          "(GPU_PLUGINS {} in rexglue_configure_target).",
+          name, path.string(), name);
+      return nullptr;
+    }
   }
 
   platform::DynamicLibrary library;
