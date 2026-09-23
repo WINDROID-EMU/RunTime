@@ -60,7 +60,14 @@ add_compile_options(
     $<$<CONFIG:DEBUG>:-O0>
     $<$<CONFIG:RELEASE>:-O3>
     $<$<CONFIG:RELEASE>:-DNDEBUG>
+    $<$<CONFIG:RELEASE>:-g0>
+    $<$<CONFIG:RELEASE>:-fomit-frame-pointer>
     -fno-char8_t
+)
+
+# Global link options
+add_link_options(
+    $<$<CONFIG:RELEASE>:-Wl,--gc-sections>
 )
 
 # Platform and Architecture: Android ARM64

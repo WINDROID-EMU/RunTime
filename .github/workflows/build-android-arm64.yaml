@@ -60,6 +60,16 @@ jobs:
         run: |
           cmake --build out/build/android-arm64 --config Release --target install --parallel
 
+      - name: Strip debug symbols from SDK release binaries
+        run: |
+          STRIP_BIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          if [ ! -f "$STRIP_BIN" ]; then
+            STRIP_BIN="llvm-strip"
+          fi
+          echo "Stripping shared libraries with $STRIP_BIN..."
+          find out/install/android-arm64/lib -name "*.so" -exec "$STRIP_BIN" --strip-unneeded {} + || true
+          find out/install/android-arm64/bin -type f -executable -exec "$STRIP_BIN" --strip-all {} + || true
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
