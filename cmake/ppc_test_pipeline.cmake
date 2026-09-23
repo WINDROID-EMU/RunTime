@@ -6,15 +6,9 @@
 # Locate PPC toolchain in tools/ directory
 set(PPC_TOOLS_DIR "${PROJECT_SOURCE_DIR}/tools/binutils")
 
-if(WIN32)
-    set(PPC_ASSEMBLER "${PPC_TOOLS_DIR}/powerpc-none-elf-as.exe")
-    set(PPC_LINKER "${PPC_TOOLS_DIR}/powerpc-none-elf-ld.exe")
-    set(PPC_NM "${PPC_TOOLS_DIR}/powerpc-none-elf-nm.exe")
-else()
-    set(PPC_ASSEMBLER "${PPC_TOOLS_DIR}/powerpc-none-elf-as")
-    set(PPC_LINKER "${PPC_TOOLS_DIR}/powerpc-none-elf-ld")
-    set(PPC_NM "${PPC_TOOLS_DIR}/powerpc-none-elf-nm")
-endif()
+set(PPC_ASSEMBLER "${PPC_TOOLS_DIR}/powerpc-none-elf-as")
+set(PPC_LINKER "${PPC_TOOLS_DIR}/powerpc-none-elf-ld")
+set(PPC_NM "${PPC_TOOLS_DIR}/powerpc-none-elf-nm")
 
 # Verify toolchain exists
 if(NOT EXISTS "${PPC_ASSEMBLER}")
@@ -27,18 +21,8 @@ endif()
 message(STATUS "PowerPC assembler: ${PPC_ASSEMBLER}")
 message(STATUS "PowerPC linker: ${PPC_LINKER}")
 
-# Convert Windows paths to Cygwin paths for binutils (Windows only)
 function(_ppc_convert_to_cygwin_path WINDOWS_PATH OUTPUT_VAR)
-    if(WIN32 AND WINDOWS_PATH MATCHES "^([A-Za-z]):")
-        string(REGEX REPLACE "^([A-Za-z]):" "/cygdrive/\\1" CYGWIN_PATH "${WINDOWS_PATH}")
-        string(SUBSTRING "${CYGWIN_PATH}" 10 1 DRIVE_LETTER)
-        string(TOLOWER "${DRIVE_LETTER}" DRIVE_LOWER)
-        string(REGEX REPLACE "^/cygdrive/[A-Za-z]" "/cygdrive/${DRIVE_LOWER}" CYGWIN_PATH "${CYGWIN_PATH}")
-        string(REPLACE "\\" "/" CYGWIN_PATH "${CYGWIN_PATH}")
-        set(${OUTPUT_VAR} "${CYGWIN_PATH}" PARENT_SCOPE)
-    else()
-        set(${OUTPUT_VAR} "${WINDOWS_PATH}" PARENT_SCOPE)
-    endif()
+    set(${OUTPUT_VAR} "${WINDOWS_PATH}" PARENT_SCOPE)
 endfunction()
 
 # Add a PPC test binary from an assembly file.

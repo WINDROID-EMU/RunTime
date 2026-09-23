@@ -16,22 +16,8 @@
 #include <rex/platform/env.h>
 #include <rex/ui/vulkan/spirv_tools_context.h>
 
-#if REX_PLATFORM_MAC
-#include "vulkan_moltenvk.h"
-#endif
-
-namespace rex {
-namespace ui {
-namespace vulkan {
-
 bool SpirvToolsContext::Initialize(unsigned int spirv_version) {
   std::filesystem::path library_path;
-
-#if REX_PLATFORM_MAC
-  const MacOSVulkanRuntimePaths macos_runtime_paths = DetectMacOSVulkanRuntimePaths();
-  ConfigureMacOSVulkanEnvironment(macos_runtime_paths);
-  library_path = macos_runtime_paths.spirv_tools_library;
-#endif
 
   if (library_path.empty()) {
     auto vulkan_sdk_env = rex::platform::env::get("VULKAN_SDK");

@@ -54,47 +54,7 @@ set(REXGPU_XENOS_VULKAN_SOURCES
     vulkan/texture_cache.cpp
 )
 
-# D3D12 backend
-if(REXGLUE_USE_D3D12)
-    # DXBC third-party dependency
-    set(REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES
-        ${REXGLUE_ROOT}/thirdparty/dxbc/DXBCChecksum.cpp
-    )
-
-    # DXBC shader translation (required for D3D12)
-    set(REXGPU_XENOS_DXBC_SOURCES
-        pipeline/shader/dxbc.cpp
-        pipeline/shader/dxbc_translator.cpp
-        pipeline/shader/dxbc_translator_alu.cpp
-        pipeline/shader/dxbc_translator_fetch.cpp
-        pipeline/shader/dxbc_translator_memexport.cpp
-        pipeline/shader/dxbc_translator_om.cpp
-    )
-
-    # D3D12 GPU backend
-    set(REXGPU_XENOS_D3D12_SOURCES
-        d3d12/graphics_system.cpp
-        d3d12/command_processor.cpp
-        d3d12/primitive_processor.cpp
-        d3d12/render_target_cache.cpp
-        d3d12/shader.cpp
-        d3d12/shared_memory.cpp
-        d3d12/texture_cache.cpp
-        d3d12/deferred_command_list.cpp
-        d3d12/pipeline_cache.cpp
-    )
-endif()
-
-if(REXGLUE_USE_VULKAN)
-    list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES})
-endif()
-
-if(REXGLUE_USE_D3D12)
-    list(APPEND REXGPU_XENOS_SOURCES
-        ${REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES}
-        ${REXGPU_XENOS_DXBC_SOURCES}
-        ${REXGPU_XENOS_D3D12_SOURCES})
-endif()
+list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_SPIRV_SOURCES} ${REXGPU_XENOS_VULKAN_SOURCES})
 
 add_library(rexgpu-xenos SHARED ${REXGPU_XENOS_SOURCES})
 add_library(rex::gpu-xenos ALIAS rexgpu-xenos)
@@ -107,7 +67,6 @@ set_target_properties(rexgpu-xenos PROPERTIES
 
 target_include_directories(rexgpu-xenos PRIVATE
     ${REXGLUE_ROOT}/thirdparty/renderdoc
-    ${REXGLUE_ROOT}  # For thirdparty/dxbc/DXBCChecksum.h include
 )
 
 target_compile_options(rexgpu-xenos PRIVATE -Wno-unused-variable)
@@ -125,36 +84,18 @@ rex_target_pch(rexgpu-xenos
     <rex/graphics/pipeline/shader/shader.h>
 )
 
-if(REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES)
-    set_source_files_properties(${REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES}
-        PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-endif()
-
 # Everything PRIVATE: the plugin has no consumers. Never link the OBJECT
 # libraries (rexcore/rexui) here; rexruntime already contains those objects
 # and relinking them would duplicate global state.
 target_link_libraries(rexgpu-xenos PRIVATE
     rexruntime
     xxHash::xxhash
+    Vulkan::Headers
+    glslang::SPIRV
+    GPUOpen::VulkanMemoryAllocator
+    glslang
+    MachineIndependent
+    GenericCodeGen
+    OSDependent
+    OGLCompiler
 )
-
-if(REXGLUE_USE_VULKAN)
-    target_link_libraries(rexgpu-xenos PRIVATE
-        Vulkan::Headers
-        glslang::SPIRV
-        GPUOpen::VulkanMemoryAllocator
-        glslang
-        MachineIndependent
-        GenericCodeGen
-        OSDependent
-        OGLCompiler
-    )
-endif()
-
-if(REXGLUE_USE_D3D12)
-    target_link_libraries(rexgpu-xenos PRIVATE
-        d3d12
-        dxgi
-        dxguid
-    )
-endif()

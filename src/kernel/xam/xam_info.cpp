@@ -21,9 +21,7 @@
 #include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 
-#if REX_PLATFORM_WIN32
-#include <windows.h>
-#endif
+#include <ctime>
 
 #include <fmt/format.h>
 #include <fmt/xchar.h>
@@ -59,46 +57,29 @@ u32 XamGetOnlineSchema_entry() {
   return schema_guest;
 }
 
-#if REX_PLATFORM_WIN32
-static SYSTEMTIME xeGetLocalSystemTime(uint64_t filetime) {
-  FILETIME t;
-  t.dwHighDateTime = filetime >> 32;
-  t.dwLowDateTime = (uint32_t)filetime;
-
-  SYSTEMTIME st;
-  SYSTEMTIME local_st;
-  FileTimeToSystemTime(&t, &st);
-  SystemTimeToTzSpecificLocalTime(NULL, &st, &local_st);
-  return local_st;
+static struct tm xeGetLocalTime(uint64_t filetime) {
+  constexpr uint64_t kFiletimeToEpochOffset = 116444736000000000ULL;
+  time_t unix_sec = 0;
+  if (filetime > kFiletimeToEpochOffset) {
+    unix_sec = static_cast<time_t>((filetime - kFiletimeToEpochOffset) / 10000000ULL);
+  }
+  struct tm tm_val {};
+  localtime_r(&unix_sec, &tm_val);
+  return tm_val;
 }
-#endif
 
 void XamFormatDateString_entry(u32 unk, u64 filetime, mapped_void output_buffer, u32 output_count) {
   std::memset(output_buffer, 0, output_count * sizeof(char16_t));
-
-// TODO: implement this for other platforms
-#if REX_PLATFORM_WIN32
-  auto st = xeGetLocalSystemTime(filetime);
-  // TODO: format this depending on users locale?
-  auto str = fmt::format(u"{:02d}/{:02d}/{}", st.wMonth, st.wDay, st.wYear);
+  auto st = xeGetLocalTime(filetime);
+  auto str = fmt::format(u"{:02d}/{:02d}/{}", st.tm_mon + 1, st.tm_mday, st.tm_year + 1900);
   rex::string::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str, output_count);
-#else
-  assert_always();
-#endif
 }
 
 void XamFormatTimeString_entry(u32 unk, u64 filetime, mapped_void output_buffer, u32 output_count) {
   std::memset(output_buffer, 0, output_count * sizeof(char16_t));
-
-// TODO: implement this for other platforms
-#if REX_PLATFORM_WIN32
-  auto st = xeGetLocalSystemTime(filetime);
-  // TODO: format this depending on users locale?
-  auto str = fmt::format(u"{:02d}:{:02d}", st.wHour, st.wMinute);
+  auto st = xeGetLocalTime(filetime);
+  auto str = fmt::format(u"{:02d}:{:02d}", st.tm_hour, st.tm_min);
   rex::string::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str, output_count);
-#else
-  assert_always();
-#endif
 }
 
 u32 keXamBuildResourceLocator(uint64_t module, std::u16string_view container,

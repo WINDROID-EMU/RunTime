@@ -30,13 +30,11 @@ REXCVAR_DEFINE_BOOL(vulkan_require_vertex_pipeline_stores_and_atomics, true, "UI
                     "Deprecated and ignored for parity; vertexPipelineStoresAndAtomics is always "
                     "required for Vulkan GPU emulation")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-// Apple Silicon / MoltenVK does not expose geometryShader or fillModeNonSolid;
-// default both to false on macOS so the device can still be selected.
-REXCVAR_DEFINE_BOOL(vulkan_require_geometry_shader, !REX_PLATFORM_MAC, "UI/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_require_geometry_shader, true, "UI/Vulkan",
                     "Require geometryShader support for Vulkan GPU emulation (disable to allow "
                     "fallback primitive emulation paths)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_BOOL(vulkan_require_fill_mode_non_solid, !REX_PLATFORM_MAC, "UI/Vulkan",
+REXCVAR_DEFINE_BOOL(vulkan_require_fill_mode_non_solid, true, "UI/Vulkan",
                     "Require fillModeNonSolid support for Vulkan GPU emulation (disable to "
                     "allow fallback to solid fill for line/point polygon modes)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -416,13 +414,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
     }
 
     if (with_swapchain) {
-#if REX_PLATFORM_WIN32
-      queue_family.may_support_presentation =
-          vulkan_instance->extensions().ext_KHR_win32_surface &&
-          ifn.vkGetPhysicalDeviceWin32PresentationSupportKHR(physical_device, queue_family_index);
-#else
       queue_family.may_support_presentation = true;
-#endif
       if (queue_family.may_support_presentation) {
         queue_family.queues.resize(std::max(size_t(1), queue_family.queues.size()));
         has_presentation_queue_family = true;

@@ -6,32 +6,26 @@
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  *
- * @modified    Rien Gupta, 2026 - Adapted for ReXGlue runtime
+ * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime (Android ARM64)
  */
 
-#include <rex/ui/surface_mac.h>
-
-#include <SDL3/SDL_metal.h>
-#include <SDL3/SDL_video.h>
+#include <rex/ui/surface_android.h>
 
 namespace rex {
 namespace ui {
 
-CAMetalLayerSurface::~CAMetalLayerSurface() {
-  if (metal_view_) {
-    SDL_Metal_DestroyView(static_cast<SDL_MetalView>(metal_view_));
-    metal_view_ = nullptr;
-  }
-}
-
-bool CAMetalLayerSurface::GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const {
-  int pixel_width = 0;
-  int pixel_height = 0;
-  if (!SDL_GetWindowSizeInPixels(window_, &pixel_width, &pixel_height)) {
+bool AndroidNativeWindowSurface::GetSizeImpl(uint32_t& width_out,
+                                             uint32_t& height_out) const {
+  if (!window_) {
     return false;
   }
-  width_out = uint32_t(pixel_width);
-  height_out = uint32_t(pixel_height);
+  int32_t width = ANativeWindow_getWidth(window_);
+  int32_t height = ANativeWindow_getHeight(window_);
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+  width_out = static_cast<uint32_t>(width);
+  height_out = static_cast<uint32_t>(height);
   return true;
 }
 

@@ -68,30 +68,15 @@ target_link_libraries(ppc_tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-# Delay-load FidelityFX DLLs so ppc_tests can run without them.
-if(WIN32)
-    if(TARGET amd_fidelityfx_vk)
-        target_link_options(ppc_tests PRIVATE
-            "LINKER:/DELAYLOAD:$<TARGET_FILE_NAME:amd_fidelityfx_vk>")
-    endif()
-    if(TARGET amd_fidelityfx_dx12)
-        target_link_options(ppc_tests PRIVATE
-            "LINKER:/DELAYLOAD:$<TARGET_FILE_NAME:amd_fidelityfx_dx12>")
-    endif()
-    if(TARGET amd_fidelityfx_vk OR TARGET amd_fidelityfx_dx12)
-        target_link_libraries(ppc_tests PRIVATE delayimp)
-    endif()
-endif()
+
 
 set_target_properties(ppc_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
 )
-if(UNIX AND NOT APPLE)
-    set_target_properties(ppc_tests PROPERTIES
-        INSTALL_RPATH "$ORIGIN"
-        BUILD_WITH_INSTALL_RPATH ON
-    )
-endif()
+set_target_properties(ppc_tests PROPERTIES
+    INSTALL_RPATH "$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH ON
+)
 
 target_compile_options(ppc_tests PRIVATE
     -UTRACY_ENABLE -UREXGLUE_ENABLE_PROFILING

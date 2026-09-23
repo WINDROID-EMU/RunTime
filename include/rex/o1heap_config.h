@@ -13,14 +13,7 @@
 // heap bin structure on first allocation.
 #pragma once
 
-#if defined(__clang__) || defined(__GNUC__)
+#include <cstdint>
+
 #define O1HEAP_CLZ(x) ((uint8_t)__builtin_clzll((unsigned long long)(x)))
-#elif defined(_MSC_VER)
-#include <intrin.h>
-static __inline uint8_t o1heap_clz_(size_t x) {
-  unsigned long index;
-  _BitScanReverse64(&index, (unsigned __int64)x);
-  return (uint8_t)(63U - index);
-}
-#define O1HEAP_CLZ(x) o1heap_clz_(x)
-#endif
+

@@ -3,32 +3,12 @@ include(${PROJECT_SOURCE_DIR}/cmake/rexglue_vulkan_stack.cmake)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-#=============================================================================
-# Architecture detection
-#=============================================================================
-if(APPLE AND CMAKE_OSX_ARCHITECTURES)
-    # On Apple, CMAKE_OSX_ARCHITECTURES is the target arch; CMAKE_SYSTEM_PROCESSOR
-    # reflects the host (e.g. arm64 on Apple Silicon even when cross-building x86_64).
-    if("arm64" IN_LIST CMAKE_OSX_ARCHITECTURES)
-        set(IS_ARM64 TRUE)
-        set(IS_X86_64 FALSE)
-    else()
-        set(IS_ARM64 FALSE)
-        set(IS_X86_64 TRUE)
-    endif()
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$")
-    set(IS_ARM64 FALSE)
-    set(IS_X86_64 TRUE)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|ARM64|arm64)$")
-    set(IS_ARM64 TRUE)
-    set(IS_X86_64 FALSE)
-else()
-    set(IS_ARM64 FALSE)
-    set(IS_X86_64 FALSE)
-endif()
+## Architecture is ARM64 (Android aarch64)
+set(IS_ARM64 TRUE)
+set(IS_X86_64 FALSE)
 
 #=============================================================================
-# Verify git submodules are initialized (only vendored ones)
+# Required submodules
 #=============================================================================
 set(REQUIRED_SUBMODULES
     cli11
@@ -49,9 +29,6 @@ if(REXGLUE_USE_VULKAN)
         vulkan-headers vulkan-memory-allocator
         spirv-headers spirv-tools glslang
     )
-    if(APPLE)
-        list(APPEND REQUIRED_SUBMODULES vulkan-loader moltenvk)
-    endif()
 endif()
 
 
@@ -200,23 +177,6 @@ if(REXGLUE_USE_VULKAN)
     # VulkanMemoryAllocator
     set(VMA_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
     add_subdirectory(vulkan-memory-allocator)
-
-    if(APPLE)
-        # Build the loader and MoltenVK revisions shipped by the pinned SDK.
-        # They remain runtime-loaded; no Vulkan implementation is linked into
-        # rexglue itself.
-        set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(BUILD_WERROR OFF CACHE BOOL "" FORCE)
-        set(LOADER_CODEGEN OFF CACHE BOOL "" FORCE)
-        string(REGEX REPLACE "\\.[0-9]+$" "" VulkanHeaders_VERSION
-            "${REXGLUE_VULKAN_SDK_VERSION}")
-        add_subdirectory(vulkan-loader EXCLUDE_FROM_ALL)
-        set_target_properties(vulkan PROPERTIES EXCLUDE_FROM_ALL FALSE)
-
-        set(MVK_BUILD_SHADER_CONVERTER_TOOL OFF CACHE BOOL "" FORCE)
-        set(MVK_EXCLUDE_SPIRV_TOOLS ON CACHE BOOL "" FORCE)
-        add_subdirectory(moltenvk)
-    endif()
 endif()
 
 #=============================================================================
@@ -242,7 +202,7 @@ target_include_directories(imgui PUBLIC
 target_compile_options(imgui PRIVATE -w)
 
 #=============================================================================
-# SDL3 - Cross-platform media layer
+# SDL3 - Android media layer
 #=============================================================================
 set(SDL_INSTALL ON CACHE BOOL "" FORCE)
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -250,23 +210,9 @@ set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
 set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
 
-# Video provides the windowing/event layer; presenters create their own
-# D3D12/Vulkan surfaces from native handles, so SDL_RENDER stays off.
 set(SDL_VIDEO ON CACHE BOOL "" FORCE)
-if(APPLE)
-    # macOS uses SDL for windowing + Metal/Vulkan surface creation.
-    set(SDL_METAL ON CACHE BOOL "" FORCE)
-    set(SDL_VULKAN ON CACHE BOOL "" FORCE)
-else()
-    set(SDL_METAL OFF CACHE BOOL "" FORCE)
-    # Linux picks X11 or Wayland at runtime, so the surface has to come from
-    # whichever driver SDL chose. Windows presenters go straight from the HWND.
-    if(UNIX)
-        set(SDL_VULKAN ON CACHE BOOL "" FORCE)
-    else()
-        set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
-    endif()
-endif()
+set(SDL_VULKAN ON CACHE BOOL "" FORCE)
+set(SDL_METAL OFF CACHE BOOL "" FORCE)
 set(SDL_RENDER OFF CACHE BOOL "" FORCE)
 set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
@@ -279,7 +225,7 @@ set(SDL_DIALOG ON CACHE BOOL "" FORCE)
 set(SDL_TRAY OFF CACHE BOOL "" FORCE)
 set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
 
-# Disable graphics APIs (unused without video) — only on non-Apple
+# Disable graphics APIs
 set(SDL_OPENGL OFF CACHE BOOL "" FORCE)
 set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
 
@@ -288,30 +234,7 @@ set(SDL_DISKAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
 
-# Linux video and audio backends. Both video drivers are always built so the
-# one in use stays a runtime choice.
-if(UNIX AND NOT APPLE)
-    set(SDL_X11               ON  CACHE BOOL "" FORCE)
-    set(SDL_WAYLAND           ON  CACHE BOOL "" FORCE)
-    set(SDL_ALSA              ON  CACHE BOOL "" FORCE)
-    set(SDL_ALSA_SHARED       ON  CACHE BOOL "" FORCE)
-    set(SDL_PULSEAUDIO        ON  CACHE BOOL "" FORCE)
-    set(SDL_PULSEAUDIO_SHARED ON  CACHE BOOL "" FORCE)
-    set(SDL_PIPEWIRE          ON  CACHE BOOL "" FORCE)
-    set(SDL_PIPEWIRE_SHARED   ON  CACHE BOOL "" FORCE)
-endif()
-
 add_subdirectory(sdl3)
-
-#=============================================================================
-# DXC API headers (vendored from DirectXShaderCompiler, runtime-loaded)
-#=============================================================================
-if(REXGLUE_USE_D3D12)
-    add_library(dxc-headers INTERFACE)
-    target_include_directories(dxc-headers INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/dxc/include>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/dxc>)
-endif()
 
 #=============================================================================
 # SPIR-V toolchain (only when Vulkan backend is enabled)
@@ -374,9 +297,6 @@ if(REXGLUE_ENABLE_TRACY)
 
     target_link_libraries(TracyClient PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 
-    if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_link_libraries(TracyClient PUBLIC ws2_32 dbghelp)
-    endif()
 
     target_compile_definitions(TracyClient
         PRIVATE
@@ -434,11 +354,7 @@ set(FFMPEG_COMMON_DEFINES
 )
 
 # Platform-specific include paths for atomics
-if(WIN32)
-    set(FFMPEG_ATOMICS_INCLUDE "${FFMPEG_DIR}/compat/atomics/win32")
-else()
-    set(FFMPEG_ATOMICS_INCLUDE "${FFMPEG_DIR}/compat/atomics/gcc")
-endif()
+set(FFMPEG_ATOMICS_INCLUDE "${FFMPEG_DIR}/compat/atomics/gcc")
 
 #=============================================================================
 # ARM64 setup for FFmpeg (NEON optimizations)
@@ -561,9 +477,6 @@ target_include_directories(libavutil
 )
 target_compile_definitions(libavutil PRIVATE ${FFMPEG_COMMON_DEFINES})
 target_compile_options(libavutil PRIVATE -w)  # Suppress warnings in third-party code
-if(WIN32)
-    target_link_libraries(libavutil PRIVATE bcrypt)
-endif()
 
 # libavcodec - FFmpeg codec library (depends on libavutil)
 add_library(libavcodec STATIC
@@ -641,44 +554,22 @@ add_library(libavcodec STATIC
     ${FFMPEG_DIR}/libavcodec/fft_init_table.c
 )
 
-# Windows-specific source
-if(WIN32)
-    target_sources(libavcodec PRIVATE
-        ${FFMPEG_DIR}/libavcodec/file_open.c
-    )
-endif()
-
-# Add x86 optimizations 
-if(IS_X86_64)
-    target_sources(libavcodec PRIVATE
-        ${FFMPEG_DIR}/libavcodec/x86/constants.c
-        ${FFMPEG_DIR}/libavcodec/x86/fdctdsp_init.c
-        ${FFMPEG_DIR}/libavcodec/x86/fft_init.c
-        ${FFMPEG_DIR}/libavcodec/x86/idctdsp_init.c
-        ${FFMPEG_DIR}/libavcodec/x86/fdct.c
-        ${FFMPEG_DIR}/libavcodec/x86/mpegaudiodsp.c
-        ${FFMPEG_DIR}/libavcodec/x86/dct_init.c
-    )
-endif()
-
 # ARM64 optimizations for libavcodec
-if(IS_ARM64)
-    target_sources(libavcodec PRIVATE
-        ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
-        ${FFMPEG_DIR}/libavcodec/aarch64/fft_neon.S
-        ${FFMPEG_DIR}/libavcodec/aarch64/mdct_neon.S
-        ${FFMPEG_DIR}/libavcodec/aarch64/simple_idct_neon.S
-        ${FFMPEG_DIR}/libavcodec/aarch64/videodsp.S
-        ${FFMPEG_DIR}/libavcodec/aarch64/neon.S
-        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
-        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_neon.S
-    )
-    target_compile_definitions(libavcodec PRIVATE
-        HAVE_NEON=1
-        HAVE_ARMV8=1
-        HAVE_INLINE_ASM=1
-    )
-endif()
+target_sources(libavcodec PRIVATE
+    ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
+    ${FFMPEG_DIR}/libavcodec/aarch64/fft_neon.S
+    ${FFMPEG_DIR}/libavcodec/aarch64/mdct_neon.S
+    ${FFMPEG_DIR}/libavcodec/aarch64/simple_idct_neon.S
+    ${FFMPEG_DIR}/libavcodec/aarch64/videodsp.S
+    ${FFMPEG_DIR}/libavcodec/aarch64/neon.S
+    ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
+    ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_neon.S
+)
+target_compile_definitions(libavcodec PRIVATE
+    HAVE_NEON=1
+    HAVE_ARMV8=1
+    HAVE_INLINE_ASM=1
+)
 
 target_include_directories(libavcodec BEFORE PRIVATE "${FFMPEG_OVERLAY_BUILD_DIR}")
 
@@ -691,9 +582,6 @@ target_include_directories(libavcodec
 target_compile_definitions(libavcodec PRIVATE ${FFMPEG_COMMON_DEFINES})
 target_compile_options(libavcodec PRIVATE -w)  # Suppress warnings in third-party code
 target_link_libraries(libavcodec PUBLIC libavutil)
-if(WIN32)
-    target_link_libraries(libavcodec PRIVATE bcrypt)
-endif()
 
 # Hidden visibility is required on aarch64. The NEON .S files use ADRP/ADD
 # PC-relative addressing (movrel) for symbols like ff_cos_*, which the linker

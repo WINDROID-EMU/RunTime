@@ -20,20 +20,10 @@
 #include <rex/memory/mapped_memory.h>
 #include <rex/platform.h>
 
-// macOS off_t is 64-bit and provides no *64 large-file variants; the base
-// names already are the large-file interfaces. Linux still ships legacy 32-bit
-// off_t on some distributions, so keep the explicit *64 forms there.
-#if defined(__APPLE__)
-using rex_stat64_t = struct stat;
-using rex_off64_t = off_t;
-#define rex_fstat64 fstat
-#define rex_ftruncate64 ftruncate
-#else
 using rex_stat64_t = struct stat64;
 using rex_off64_t = off64_t;
 #define rex_fstat64 fstat64
 #define rex_ftruncate64 ftruncate64
-#endif
 
 namespace rex::memory {
 

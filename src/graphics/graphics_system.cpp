@@ -60,17 +60,7 @@ rex::graphics::CommandProcessor::SwapPostEffect ParseSwapPostEffect(
 
 namespace rex::graphics {
 
-// Nvidia Optimus/AMD PowerXpress support.
-// These exports force the process to trigger the discrete GPU in multi-GPU
-// systems.
-// https://developer.download.nvidia.com/devzone/devcenter/gamegraphics/files/OptimusRenderingPolicies.pdf
-// https://stackoverflow.com/questions/17458803/amd-equivalent-to-nvoptimusenablement
-#if REX_PLATFORM_WIN32
-extern "C" {
-__declspec(dllexport) uint32_t NvOptimusEnablement = 0x00000001;
-__declspec(dllexport) uint32_t AmdPowerXpressRequestHighPerformance = 1;
-}  // extern "C"
-#endif  // REX_PLATFORM_WIN32
+
 
 GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
 

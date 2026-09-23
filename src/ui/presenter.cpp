@@ -287,16 +287,6 @@ Presenter::~Presenter() {
   // it if needed.
   assert_false(is_executing_ui_drawers_);
 
-#if REX_PLATFORM_WIN32
-  if (dxgi_ui_tick_thread_.joinable()) {
-    {
-      std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-      dxgi_ui_tick_thread_shutdown_ = true;
-    }
-    dxgi_ui_tick_control_condition_.notify_all();
-    dxgi_ui_tick_thread_.join();
-  }
-#endif  // XE_PLATFORM
 
   if (window_) {
     Window* old_window = window_;
@@ -791,10 +781,7 @@ bool Presenter::InitializeCommonSurfaceIndependent() {
     guest_output_paint_config_ = BuildGuestOutputPaintConfigFromCVar();
   }
 
-  // Initialize UI frame rate limiting.
-#if REX_PLATFORM_WIN32
-  dxgi_ui_tick_thread_ = std::thread(&Presenter::DXGIUITickThread, this);
-#endif  // XE_PLATFORM
+
 
   return true;
 }
@@ -1426,72 +1413,13 @@ bool Presenter::RequestPaintOrConnectionRecoveryViaWindow(bool force_ui_thread_p
 }
 
 void Presenter::UpdateSurfaceMonitorFromUIThread(bool old_monitor_potentially_disconnected) {
-  // For dropping the monitor when the window is closing and is losing its
-  // surface, the existence of `surface_` (which implies that `window_` exists
-  // too) must be the condition for a non-null monitor, not just the existence
-  // of `window_`.
-#if REX_PLATFORM_WIN32
-  HMONITOR surface_new_win32_monitor = nullptr;
-  if (surface_) {
-    HWND hwnd = static_cast<HWND>(window_->GetNativeWindowHandle());
-    // The HWND may be non-existent if the window has been closed and destroyed
-    // (the HWND, not the rex::ui::Window) already.
-    if (hwnd) {
-      surface_new_win32_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
-    }
-  }
-  if (old_monitor_potentially_disconnected || surface_win32_monitor_ != surface_new_win32_monitor) {
-    surface_win32_monitor_ = surface_new_win32_monitor;
-    if (dxgi_ui_tick_factory_ && !dxgi_ui_tick_factory_->IsCurrent()) {
-      // If a monitor has been newly connected, it won't appear in the old
-      // factory, need to recreate it.
-      {
-        Microsoft::WRL::ComPtr<IDXGIOutput> old_factory_output_to_release;
-        {
-          std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-          old_factory_output_to_release = std::move(dxgi_ui_tick_output_);
-        }
-      }
-      dxgi_ui_tick_factory_.Reset();
-    }
-    if (!dxgi_ui_tick_factory_) {
-      if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&dxgi_ui_tick_factory_)))) {
-        REXLOG_ERROR("Presenter: Failed to create a DXGI factory");
-      }
-    }
-    Microsoft::WRL::ComPtr<IDXGIOutput> new_dxgi_output;
-    if (dxgi_ui_tick_factory_ && surface_new_win32_monitor) {
-      new_dxgi_output =
-          GetDXGIOutputForMonitor(dxgi_ui_tick_factory_.Get(), surface_new_win32_monitor);
-    }
-    // If the adapter was recreated, and the old output was released before its
-    // destruction, notifying is still required - the vertical blank wait thread
-    // might have entered the condition variable wait already as the output was
-    // null.
-    bool signal_dxgi_ui_tick_control;
-    {
-      std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-      bool dxgi_output_was_null = (dxgi_ui_tick_output_ == nullptr);
-      dxgi_ui_tick_output_ = new_dxgi_output;
-      signal_dxgi_ui_tick_control =
-          dxgi_output_was_null && AreDXGIUITicksWaitable(dxgi_ui_tick_lock);
-    }
-    if (signal_dxgi_ui_tick_control) {
-      dxgi_ui_tick_control_condition_.notify_all();
-    }
-  }
-#endif  // XE_PLATFORM
 }
 
 bool Presenter::InSurfaceOnMonitorFromUIThread() const {
   if (!surface_) {
     return false;
   }
-#if REX_PLATFORM_WIN32
-  return surface_win32_monitor_ != nullptr;
-#else
   return true;
-#endif  // XE_PLATFORM
 }
 
 Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {
@@ -1559,109 +1487,13 @@ void Presenter::HandleUIDrawersChangeFromUIThread(bool drawers_were_empty) {
 }
 
 void Presenter::UpdateUITicksNeededFromUIThread() {
-#if REX_PLATFORM_WIN32
-  bool new_needed = AreUITicksNeededFromUIThread();
-  if (dxgi_ui_ticks_needed_ == new_needed) {
-    return;
-  }
-  bool signal_dxgi_ui_tick_control;
-  {
-    std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-    dxgi_ui_ticks_needed_ = new_needed;
-    signal_dxgi_ui_tick_control = AreDXGIUITicksWaitable(dxgi_ui_tick_lock);
-  }
-  if (signal_dxgi_ui_tick_control) {
-    dxgi_ui_tick_control_condition_.notify_all();
-  }
-#endif
 }
 
 void Presenter::WaitForUITickFromUIThread() {
-#if REX_PLATFORM_WIN32
-  if (!AreUITicksNeededFromUIThread()) {
-    return;
-  }
-  std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-  uint64_t last_vblank_before_wait = dxgi_ui_tick_last_vblank_;
-  while (true) {
-    // Guest output present requests should interrupt the wait as quickly as
-    // possible as they should be fulfilled as early as possible.
-    if (dxgi_ui_tick_force_requested_) {
-      dxgi_ui_tick_force_requested_ = false;
-      return;
-    }
-    if (!AreDXGIUITicksWaitable(dxgi_ui_tick_lock)) {
-      return;
-    }
-    if (dxgi_ui_tick_last_vblank_ > dxgi_ui_tick_last_draw_) {
-      // If there have been multiple vblanks during the wait for some reason,
-      // next time draw the UI immediately.
-      dxgi_ui_tick_last_draw_ =
-          std::min(last_vblank_before_wait + uint64_t(1), dxgi_ui_tick_last_vblank_);
-      return;
-    }
-    dxgi_ui_tick_signal_condition_.wait(dxgi_ui_tick_lock);
-  }
-#endif  // XE_PLATFORM
 }
 
 void Presenter::ForceUIThreadPaintTick() {
-#if REX_PLATFORM_WIN32
-  std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-  dxgi_ui_tick_force_requested_ = true;
-#endif  // XE_PLATFORM
 }
-
-#if REX_PLATFORM_WIN32
-Microsoft::WRL::ComPtr<IDXGIOutput> Presenter::GetDXGIOutputForMonitor(IDXGIFactory1* factory,
-                                                                       HMONITOR monitor) {
-  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
-  for (UINT adapter_index = 0;
-       SUCCEEDED(factory->EnumAdapters(adapter_index, adapter.ReleaseAndGetAddressOf()));
-       ++adapter_index) {
-    Microsoft::WRL::ComPtr<IDXGIOutput> output;
-    for (UINT output_index = 0; SUCCEEDED(adapter->EnumOutputs(output_index, &output));
-         ++output_index) {
-      DXGI_OUTPUT_DESC output_desc;
-      if (SUCCEEDED(output->GetDesc(&output_desc)) && output_desc.Monitor == monitor) {
-        return std::move(output);
-      }
-    }
-  }
-  return nullptr;
-}
-
-void Presenter::DXGIUITickThread() {
-  std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-  while (true) {
-    if (dxgi_ui_tick_thread_shutdown_) {
-      return;
-    }
-    if (!AreDXGIUITicksWaitable(dxgi_ui_tick_lock)) {
-      dxgi_ui_tick_control_condition_.wait(dxgi_ui_tick_lock);
-      continue;
-    }
-    // Wait for vertical blank, with the mutex unlocked (holding a new reference
-    // to the current output while it's happening) so subscribers can still do
-    // early-out checks.
-    bool wait_succeeded;
-    {
-      Microsoft::WRL::ComPtr<IDXGIOutput> dxgi_output = dxgi_ui_tick_output_;
-      dxgi_ui_tick_lock.unlock();
-      wait_succeeded = SUCCEEDED(dxgi_ui_tick_output_->WaitForVBlank());
-    }
-    dxgi_ui_tick_lock.lock();
-    if (wait_succeeded) {
-      ++dxgi_ui_tick_last_vblank_;
-    } else {
-      // Lost the ability to wait for a vertical blank on this output, notify
-      // the waiting threads, and wait for a new one.
-      dxgi_ui_tick_output_.Reset();
-    }
-    dxgi_ui_tick_signal_condition_.notify_all();
-  }
-}
-#endif  // XE_PLATFORM
 
 }  // namespace ui
 }  // namespace rex

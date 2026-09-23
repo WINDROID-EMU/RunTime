@@ -33,18 +33,7 @@
 #include <ffx_api/vk/ffx_api_vk.h>
 #endif
 
-#if REX_PLATFORM_ANDROID
 #include <rex/ui/surface_android.h>
-#endif
-#if REX_PLATFORM_GNU_LINUX
-#include <rex/ui/surface_gnulinux.h>
-#endif
-#if REX_PLATFORM_WIN32
-#include <rex/ui/surface_win.h>
-#endif
-#if REX_PLATFORM_MAC
-#include <rex/ui/surface_mac.h>
-#endif
 
 REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
                     "Clear render pass during presentation");
@@ -423,29 +412,9 @@ Surface::TypeFlags VulkanPresenter::GetSurfaceTypesSupportedByInstance(
     return 0;
   }
   Surface::TypeFlags type_flags = 0;
-#if REX_PLATFORM_ANDROID
   if (instance_extensions.ext_KHR_android_surface) {
     type_flags |= Surface::kTypeFlag_AndroidNativeWindow;
   }
-#endif
-#if REX_PLATFORM_GNU_LINUX
-  if (instance_extensions.ext_KHR_wayland_surface) {
-    type_flags |= Surface::kTypeFlag_WaylandSurface;
-  }
-  if (instance_extensions.ext_KHR_xcb_surface) {
-    type_flags |= Surface::kTypeFlag_XcbWindow;
-  }
-#endif
-#if REX_PLATFORM_WIN32
-  if (instance_extensions.ext_KHR_win32_surface) {
-    type_flags |= Surface::kTypeFlag_Win32Hwnd;
-  }
-#endif
-#if REX_PLATFORM_MAC
-  if (instance_extensions.ext_EXT_metal_surface) {
-    type_flags |= Surface::kTypeFlag_CAMetalLayer;
-  }
-#endif
   return type_flags;
 }
 
@@ -796,7 +765,6 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
     }
     VkResult vulkan_surface_create_result = VK_ERROR_UNKNOWN;
     switch (surface_type) {
-#if REX_PLATFORM_ANDROID
       case Surface::kTypeIndex_AndroidNativeWindow: {
         auto& android_native_window_surface =
             static_cast<const AndroidNativeWindowSurface&>(new_surface);
@@ -808,56 +776,6 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_su
         vulkan_surface_create_result = ifn.vkCreateAndroidSurfaceKHR(
             instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
       } break;
-#endif
-#if REX_PLATFORM_GNU_LINUX
-      case Surface::kTypeIndex_XcbWindow: {
-        auto& xcb_window_surface = static_cast<const XcbWindowSurface&>(new_surface);
-        VkXcbSurfaceCreateInfoKHR surface_create_info;
-        surface_create_info.sType = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
-        surface_create_info.pNext = nullptr;
-        surface_create_info.flags = 0;
-        surface_create_info.connection = xcb_window_surface.connection();
-        surface_create_info.window = xcb_window_surface.window();
-        vulkan_surface_create_result = ifn.vkCreateXcbSurfaceKHR(
-            instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
-      } break;
-      case Surface::kTypeIndex_WaylandSurface: {
-        auto& wayland_surface = static_cast<const WaylandSurface&>(new_surface);
-        VkWaylandSurfaceCreateInfoKHR surface_create_info;
-        surface_create_info.sType = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
-        surface_create_info.pNext = nullptr;
-        surface_create_info.flags = 0;
-        surface_create_info.display = wayland_surface.display();
-        surface_create_info.surface = wayland_surface.surface();
-        vulkan_surface_create_result = ifn.vkCreateWaylandSurfaceKHR(
-            instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
-      } break;
-#endif
-#if REX_PLATFORM_WIN32
-      case Surface::kTypeIndex_Win32Hwnd: {
-        auto& win32_hwnd_surface = static_cast<const Win32HwndSurface&>(new_surface);
-        VkWin32SurfaceCreateInfoKHR surface_create_info;
-        surface_create_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-        surface_create_info.pNext = nullptr;
-        surface_create_info.flags = 0;
-        surface_create_info.hinstance = win32_hwnd_surface.hinstance();
-        surface_create_info.hwnd = win32_hwnd_surface.hwnd();
-        vulkan_surface_create_result = ifn.vkCreateWin32SurfaceKHR(
-            instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
-      } break;
-#endif
-#if REX_PLATFORM_MAC
-      case Surface::kTypeIndex_CAMetalLayer: {
-        auto& metal_surface = static_cast<const CAMetalLayerSurface&>(new_surface);
-        VkMetalSurfaceCreateInfoEXT surface_create_info;
-        surface_create_info.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
-        surface_create_info.pNext = nullptr;
-        surface_create_info.flags = 0;
-        surface_create_info.pLayer = metal_surface.layer();
-        vulkan_surface_create_result = ifn.vkCreateMetalSurfaceEXT(
-            instance, &surface_create_info, nullptr, &paint_context_.vulkan_surface);
-      } break;
-#endif
       default:
         assert_unhandled_case(surface_type);
         REXLOG_ERROR(
@@ -1221,15 +1139,9 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
     // specification violation).
     surface_formats.clear();
   }
-#if REX_PLATFORM_ANDROID
   // Android uses R8G8B8A8.
   static const VkFormat kFormat8888Primary = VK_FORMAT_R8G8B8A8_UNORM;
   static const VkFormat kFormat8888Secondary = VK_FORMAT_B8G8R8A8_UNORM;
-#else
-  // GNU/Linux X11 and Windows DWM use B8G8R8A8.
-  static const VkFormat kFormat8888Primary = VK_FORMAT_B8G8R8A8_UNORM;
-  static const VkFormat kFormat8888Secondary = VK_FORMAT_R8G8B8A8_UNORM;
-#endif
   VkSurfaceFormatKHR image_format;
   if (surface_formats.empty() ||
       (surface_formats.size() == 1 || surface_formats[0].format == VK_FORMAT_UNDEFINED)) {

@@ -7,17 +7,7 @@
 
 #include "sha256.h"
 
-// big endian architectures need #define __BYTE_ORDER __BIG_ENDIAN
-#ifndef _MSC_VER
-#if defined(__APPLE__)
-#if !defined(__BYTE_ORDER) && defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__)
-#define __BYTE_ORDER __BYTE_ORDER__
-#define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
-#endif
-#else
 #include <endian.h>
-#endif
-#endif
 
 namespace sha256 {
 

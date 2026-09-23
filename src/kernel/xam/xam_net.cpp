@@ -14,9 +14,7 @@
 
 #include <cstring>
 
-#if REX_PLATFORM_MAC
 #include <sys/select.h>
-#endif
 
 #include <rex/chrono/clock.h>
 #include <rex/kernel/xam/module.h>
@@ -33,16 +31,10 @@
 #include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 
-#if REX_PLATFORM_WIN32
-// NOTE: must be included last as it expects windows.h to already be included.
-#define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
-#include <winsock2.h>                    // NOLINT(build/include_order)
-#elif REX_PLATFORM_LINUX || REX_PLATFORM_MAC
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <sys/socket.h>
-#endif
 
 namespace rex {
 namespace kernel {
@@ -239,28 +231,6 @@ u32 NetDll_XNetRandom_entry(u32 caller, mapped_void buffer_ptr, u32 length) {
 }
 
 u32 NetDll_WSAStartup_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_ptr) {
-// TODO(benvanik): abstraction layer needed.
-#if REX_PLATFORM_WIN32
-  WSADATA wsaData;
-  ZeroMemory(&wsaData, sizeof(WSADATA));
-  int ret = WSAStartup(version, &wsaData);
-
-  auto data_out = REX_KERNEL_MEMORY()->TranslateVirtual(data_ptr.guest_address());
-
-  if (data_ptr) {
-    data_ptr->version = wsaData.wVersion;
-    data_ptr->version_high = wsaData.wHighVersion;
-    std::memcpy(&data_ptr->description, wsaData.szDescription, 0x100);
-    std::memcpy(&data_ptr->system_status, wsaData.szSystemStatus, 0x80);
-    data_ptr->max_sockets = wsaData.iMaxSockets;
-    data_ptr->max_udpdg = wsaData.iMaxUdpDg;
-
-    // Some games (5841099F) want this value round-tripped - they'll compare if
-    // it changes and bugcheck if it does.
-    uint32_t vendor_ptr = memory::load_and_swap<uint32_t>(data_out + 0x190);
-    memory::store_and_swap<uint32_t>(data_out + 0x190, vendor_ptr);
-  }
-#else
   int ret = 0;
   if (data_ptr) {
     // Guess these values!
@@ -270,7 +240,6 @@ u32 NetDll_WSAStartup_entry(u32 caller, u16 version, ppc_ptr_t<X_WSADATA> data_p
     data_ptr->max_sockets = 100;
     data_ptr->max_udpdg = 1024;
   }
-#endif
 
   // DEBUG
   /*
@@ -620,12 +589,7 @@ i32 NetDll_shutdown_entry(u32 caller, u32 socket_handle, i32 how) {
 
   auto ret = socket->Shutdown(how);
   if (ret == -1) {
-#if REX_PLATFORM_WIN32
-    uint32_t error_code = WSAGetLastError();
-    XThread::SetLastError(error_code);
-#else
     XThread::SetLastError(0x0);
-#endif
   }
   return ret;
 }
@@ -883,13 +847,7 @@ u32 NetDll_recvfrom_entry(u32 caller, u32 socket_handle, mapped_void buf_ptr, u3
   }
 
   if (ret == -1) {
-// TODO: Better way of getting the error code
-#if REX_PLATFORM_WIN32
-    uint32_t error_code = WSAGetLastError();
-    XThread::SetLastError(error_code);
-#else
     XThread::SetLastError(0x0);
-#endif
   }
 
   return ret;

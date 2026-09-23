@@ -27,9 +27,7 @@ if(REXGLUE_USE_VULKAN)
     )
 endif()
 
-if(REXGLUE_USE_D3D12)
-    list(APPEND REXGLUE_INSTALL_TARGETS dxc-headers)
-endif()
+
 
 if(REXGLUE_ENABLE_TRACY)
     list(APPEND REXGLUE_INSTALL_TARGETS TracyClient)
@@ -128,31 +126,7 @@ install(FILES
     DESTINATION ${CMAKE_INSTALL_DATADIR}/rexglue
 )
 
-# Install DXC API headers (vendored, for D3D12 backend)
-if(REXGLUE_USE_D3D12)
-    install(FILES
-        thirdparty/dxc/include/DxbcConverter.h
-        thirdparty/dxc/include/dxcapi.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dxc
-    )
-endif()
 
-if(APPLE AND REXGLUE_USE_VULKAN)
-    install(FILES "$<TARGET_FILE:Vulkan::Loader>"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        CONFIGURATIONS Release
-        RENAME libvulkan.1.dylib
-    )
-    install(FILES "$<TARGET_FILE:MoltenVK::MoltenVK>"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        CONFIGURATIONS Release
-        RENAME libMoltenVK.dylib
-    )
-    install(FILES cmake/MoltenVK_icd.json
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/vulkan/icd.d
-        CONFIGURATIONS Release
-    )
-endif()
 
 # Generate and install package config files
 configure_package_config_file(
@@ -192,26 +166,11 @@ install(EXPORT rexglueTargets
 # Windows: HKCU\Software\Kitware\CMake\Packages\rexglue  (REG_SZ, value name = MD5 hash)
 # Unix:    ~/.cmake/packages/rexglue/<hash>               (file containing prefix path)
 install(CODE [[
-    # Normalize path casing on Windows before hashing to avoid duplicate entries
-    if(CMAKE_HOST_WIN32)
-        string(TOLOWER "${CMAKE_INSTALL_PREFIX}" _reg_key)
-    else()
-        set(_reg_key "${CMAKE_INSTALL_PREFIX}")
-    endif()
+    set(_reg_key "${CMAKE_INSTALL_PREFIX}")
     string(MD5 _hash "${_reg_key}")
-
-    if(CMAKE_HOST_WIN32)
-        # Windows CMake User Package Registry lives in HKCU (not the filesystem)
-        set(_reg_root "HKCU\\Software\\Kitware\\CMake\\Packages\\rexglue")
-        execute_process(
-            COMMAND reg add "${_reg_root}" /v "${_hash}" /t REG_SZ /d "${CMAKE_INSTALL_PREFIX}" /f
-            OUTPUT_QUIET ERROR_QUIET
-        )
-    else()
-        set(_reg_dir "$ENV{HOME}/.cmake/packages/rexglue")
-        file(MAKE_DIRECTORY "${_reg_dir}")
-        file(WRITE "${_reg_dir}/${_hash}" "${CMAKE_INSTALL_PREFIX}")
-    endif()
+    set(_reg_dir "$ENV{HOME}/.cmake/packages/rexglue")
+    file(MAKE_DIRECTORY "${_reg_dir}")
+    file(WRITE "${_reg_dir}/${_hash}" "${CMAKE_INSTALL_PREFIX}")
     message(STATUS "Registered rexglue in CMake user package registry")
     message(STATUS "  -> ${CMAKE_INSTALL_PREFIX}")
 ]])

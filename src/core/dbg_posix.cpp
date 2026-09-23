@@ -13,32 +13,15 @@
 #include <iostream>
 #include <mutex>
 
-#if defined(__APPLE__)
-#include <sys/sysctl.h>
-#include <sys/types.h>
-#include <unistd.h>
-#else
 #include <cstdarg>
 #include <fstream>
 #include <sstream>
-#endif
 
 #include <rex/dbg.h>
 
 namespace rex::debug {
 
 bool IsDebuggerAttached() {
-#if defined(__APPLE__)
-  // Darwin has no /proc; query the process's traced flag via sysctl.
-  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
-  kinfo_proc process_info = {};
-  size_t process_info_size = sizeof(process_info);
-  if (sysctl(mib, 4, &process_info, &process_info_size, nullptr, 0) != 0 ||
-      process_info_size < sizeof(process_info)) {
-    return false;
-  }
-  return (process_info.kp_proc.p_flag & P_TRACED) != 0;
-#else
   std::ifstream proc_status_stream("/proc/self/status");
   if (!proc_status_stream.is_open()) {
     return false;
@@ -55,7 +38,6 @@ bool IsDebuggerAttached() {
     }
   }
   return false;
-#endif
 }
 
 void Break() {

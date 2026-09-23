@@ -125,146 +125,6 @@ bool MMIOHandler::CheckStore(uint32_t virtual_address, uint32_t value) {
 
 bool MMIOHandler::TryDecodeLoadStore(const uint8_t* p, DecodedLoadStore& decoded_out) {
   std::memset(&decoded_out, 0, sizeof(decoded_out));
-#if REX_ARCH_AMD64
-  uint8_t i = 0;  // Current byte decode index.
-  uint8_t rex = 0;
-  if ((p[i] & 0xF0) == 0x40) {
-    rex = p[0];
-    ++i;
-  }
-  if (p[i] == 0x0F && p[i + 1] == 0x38 && p[i + 2] == 0xF1) {
-    // MOVBE m32, r32 (store)
-    // https://web.archive.org/web/20170629091435/https://www.tptp.cc/mirrors/siyobik.info/instruction/MOVBE.html
-    // 44 0f 38 f1 a4 02 00     movbe  DWORD PTR [rdx+rax*1+0x0],r12d
-    // 42 0f 38 f1 8c 22 00     movbe  DWORD PTR [rdx+r12*1+0x0],ecx
-    // 0f 38 f1 8c 02 00 00     movbe  DWORD PTR [rdx + rax * 1 + 0x0], ecx
-    decoded_out.is_load = false;
-    decoded_out.byte_swap = true;
-    i += 3;
-  } else if (p[i] == 0x0F && p[i + 1] == 0x38 && p[i + 2] == 0xF0) {
-    // MOVBE r32, m32 (load)
-    // https://web.archive.org/web/20170629091435/https://www.tptp.cc/mirrors/siyobik.info/instruction/MOVBE.html
-    // 44 0f 38 f0 a4 02 00     movbe  r12d,DWORD PTR [rdx+rax*1+0x0]
-    // 42 0f 38 f0 8c 22 00     movbe  ecx,DWORD PTR [rdx+r12*1+0x0]
-    // 46 0f 38 f0 a4 22 00     movbe  r12d,DWORD PTR [rdx+r12*1+0x0]
-    // 0f 38 f0 8c 02 00 00     movbe  ecx,DWORD PTR [rdx+rax*1+0x0]
-    // 0F 38 F0 1C 02           movbe  ebx,dword ptr [rdx+rax]
-    decoded_out.is_load = true;
-    decoded_out.byte_swap = true;
-    i += 3;
-  } else if (p[i] == 0x89) {
-    // MOV m32, r32 (store)
-    // https://web.archive.org/web/20170629072136/https://www.tptp.cc/mirrors/siyobik.info/instruction/MOV.html
-    // 44 89 24 02              mov  DWORD PTR[rdx + rax * 1], r12d
-    // 42 89 0c 22              mov  DWORD PTR[rdx + r12 * 1], ecx
-    // 89 0c 02                 mov  DWORD PTR[rdx + rax * 1], ecx
-    decoded_out.is_load = false;
-    decoded_out.byte_swap = false;
-    ++i;
-  } else if (p[i] == 0x8B) {
-    // MOV r32, m32 (load)
-    // https://web.archive.org/web/20170629072136/https://www.tptp.cc/mirrors/siyobik.info/instruction/MOV.html
-    // 44 8b 24 02              mov  r12d, DWORD PTR[rdx + rax * 1]
-    // 42 8b 0c 22              mov  ecx, DWORD PTR[rdx + r12 * 1]
-    // 46 8b 24 22              mov  r12d, DWORD PTR[rdx + r12 * 1]
-    // 8b 0c 02                 mov  ecx, DWORD PTR[rdx + rax * 1]
-    decoded_out.is_load = true;
-    decoded_out.byte_swap = false;
-    ++i;
-  } else if (p[i] == 0xC7) {
-    // MOV m32, simm32
-    // https://web.archive.org/web/20161017042413/https://www.asmpedia.org/index.php?title=MOV
-    // C7 04 02 02 00 00 00     mov  dword ptr [rdx+rax],2
-    decoded_out.is_load = false;
-    decoded_out.byte_swap = false;
-    decoded_out.is_constant = true;
-    ++i;
-  } else {
-    return false;
-  }
-
-  uint8_t rex_b = rex & 0b0001;
-  uint8_t rex_x = rex & 0b0010;
-  uint8_t rex_r = rex & 0b0100;
-  uint8_t rex_w = rex & 0b1000;
-
-  // http://www.sandpile.org/x86/opc_rm.htm
-  // http://www.sandpile.org/x86/opc_sib.htm
-  uint8_t modrm = p[i++];
-  uint8_t mod = (modrm & 0b11000000) >> 6;
-  uint8_t reg = (modrm & 0b00111000) >> 3;
-  uint8_t rm = (modrm & 0b00000111);
-  decoded_out.value_reg = reg + (rex_r ? 8 : 0);
-  decoded_out.mem_has_base = false;
-  decoded_out.mem_base_reg = 0;
-  decoded_out.mem_has_index = false;
-  decoded_out.mem_index_reg = 0;
-  decoded_out.mem_scale = 1;
-  decoded_out.mem_displacement = 0;
-  bool has_sib = false;
-  switch (rm) {
-    case 0b100:  // SIB
-      has_sib = true;
-      break;
-    case 0b101:
-      if (mod == 0b00) {
-        // RIP-relative not supported.
-        return false;
-      }
-      decoded_out.mem_has_base = true;
-      decoded_out.mem_base_reg = rm + (rex_b ? 8 : 0);
-      break;
-    default:
-      decoded_out.mem_has_base = true;
-      decoded_out.mem_base_reg = rm + (rex_b ? 8 : 0);
-      break;
-  }
-  if (has_sib) {
-    uint8_t sib = p[i++];
-    decoded_out.mem_scale = 1 << ((sib & 0b11000000) >> 8);
-    uint8_t sib_index = (sib & 0b00111000) >> 3;
-    uint8_t sib_base = (sib & 0b00000111);
-    switch (sib_index) {
-      case 0b100:
-        // No index.
-        break;
-      default:
-        decoded_out.mem_has_index = true;
-        decoded_out.mem_index_reg = sib_index + (rex_x ? 8 : 0);
-        decoded_out.mem_index_size = sizeof(uint64_t);
-        break;
-    }
-    switch (sib_base) {
-      case 0b101:
-        // Alternate rbp-relative addressing not supported.
-        assert_zero(mod);
-        return false;
-      default:
-        decoded_out.mem_has_base = true;
-        decoded_out.mem_base_reg = sib_base + (rex_b ? 8 : 0);
-        break;
-    }
-  }
-  switch (mod) {
-    case 0b00: {
-      decoded_out.mem_displacement += 0;
-    } break;
-    case 0b01: {
-      decoded_out.mem_displacement += int8_t(p[i++]);
-    } break;
-    case 0b10: {
-      decoded_out.mem_displacement += memory::load<int32_t>(p + i);
-      i += 4;
-    } break;
-  }
-  if (decoded_out.is_constant) {
-    decoded_out.constant = memory::load<int32_t>(p + i);
-    i += 4;
-  }
-  decoded_out.length = i;
-  return true;
-
-#elif REX_ARCH_ARM64
   decoded_out.length = sizeof(uint32_t);
   uint32_t instruction = *reinterpret_cast<const uint32_t*>(p);
 
@@ -461,9 +321,6 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
       // We swap only if it's not a movbe, as otherwise we are swapping twice.
       value = rex::byte_swap(value);
     }
-#if REX_ARCH_AMD64
-    ex->ModifyIntRegister(value_reg) = value;
-#elif REX_ARCH_ARM64
     if (value_reg >= DecodedLoadStore::kArm64ValueRegX0 &&
         value_reg <= (DecodedLoadStore::kArm64ValueRegX0 + 30)) {
       ex->ModifyXRegister(value_reg - DecodedLoadStore::kArm64ValueRegX0) = value;
@@ -474,18 +331,12 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
       assert_true(value_reg == DecodedLoadStore::kArm64ValueRegZero);
       // Register write is ignored for X31.
     }
-#else
-#error Register value writing not implemented for the target CPU architecture.
-#endif  // REX_ARCH
   } else {
     // Store of a register value - read register, swap, write to range.
     uint32_t value;
     if (decoded_load_store.is_constant) {
       value = uint32_t(decoded_load_store.constant);
     } else {
-#if REX_ARCH_AMD64
-      value = uint32_t(thread_context.int_registers[value_reg]);
-#elif REX_ARCH_ARM64
       if (value_reg >= DecodedLoadStore::kArm64ValueRegX0 &&
           value_reg <= (DecodedLoadStore::kArm64ValueRegX0 + 30)) {
         value = uint32_t(thread_context.x[value_reg - DecodedLoadStore::kArm64ValueRegX0]);
@@ -496,9 +347,6 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
         assert_true(value_reg == DecodedLoadStore::kArm64ValueRegZero);
         value = 0;
       }
-#else
-#error Register value reading not implemented for the target CPU architecture.
-#endif  // REX_ARCH
       if (!decoded_load_store.byte_swap) {
         // We swap only if it's not a movbe, as otherwise we are swapping twice.
         value = rex::byte_swap(value);
@@ -507,7 +355,6 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
     range->write(nullptr, range->callback_context, fault_guest_virtual_address, value);
   }
 
-#if REX_ARCH_ARM64
   // Write the base address with the pre- or the post-index offset, overwriting
   // the register to load to if it's the same.
   if (decoded_load_store.mem_has_base && decoded_load_store.mem_base_writeback) {
@@ -518,7 +365,6 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
       ex->ModifyXRegister(decoded_load_store.mem_base_reg) = mem_base_writeback_address;
     }
   }
-#endif  // REX_ARCH_ARM64
 
   // Advance RIP to the next instruction so that we resume properly.
   ex->set_resume_pc(rip + decoded_load_store.length);

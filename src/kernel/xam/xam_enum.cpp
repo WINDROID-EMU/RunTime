@@ -19,9 +19,6 @@
 #include <rex/system/xenumerator.h>
 #include <rex/system/xtypes.h>
 
-#if REX_PLATFORM_WIN32
-#include <rex/platform.h>
-#endif
 
 #include <fmt/format.h>
 

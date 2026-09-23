@@ -952,19 +952,11 @@ bool PrimitiveProcessor::IsResetUsed(const uint16_t* source, uint32_t count,
       count -= kSimdVectorU16Elements;
       SimdVectorU16 source_simd = LoadAlignedVectorU16(source);
       source += kSimdVectorU16Elements;
-#if REX_ARCH_AMD64
-      if (_mm_movemask_epi8(_mm_cmpeq_epi16(source_simd, reset_index_guest_endian_simd))) {
-        return true;
-      }
-#elif REX_ARCH_ARM64
       uint64x1_t is_any = vreinterpret_u64_u32(
           vqmovn_u64(vreinterpretq_u64_u16(vceqq_u16(source_simd, reset_index_guest_endian_simd))));
       if (*reinterpret_cast<const uint64_t*>(&is_any)) {
         return true;
       }
-#else
-#error SIMD 16-bit IsResetUsed not implemented.
-#endif  // XE_ARCH
     }
   }
 #endif  // XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
@@ -1012,26 +1004,10 @@ void PrimitiveProcessor::Get16BitResetIndexUsage(const uint16_t* source, uint32_
       count -= kSimdVectorU16Elements;
       SimdVectorU16 source_simd = LoadAlignedVectorU16(source);
       source += kSimdVectorU16Elements;
-#if REX_ARCH_AMD64
-      is_reset_simd =
-          _mm_or_si128(is_reset_simd, _mm_cmpeq_epi16(source_simd, reset_index_guest_endian_simd));
-      is_ffff_simd = _mm_or_si128(is_ffff_simd, _mm_cmpeq_epi16(source_simd, ffff_simd));
-#elif REX_ARCH_ARM64
       is_reset_simd =
           vorrq_u16(is_reset_simd, vceqq_u16(source_simd, reset_index_guest_endian_simd));
       is_ffff_simd = vmaxq_u16(is_ffff_simd, source_simd);
-#else
-#error SIMD Get16BitResetIndexUsage not implemented.
-#endif  // XE_ARCH
     }
-#if REX_ARCH_AMD64
-    if (_mm_movemask_epi8(is_reset_simd)) {
-      is_reset_index_used_out = true;
-    }
-    if (_mm_movemask_epi8(is_ffff_simd)) {
-      is_ffff_used_as_vertex_index_out = true;
-    }
-#elif REX_ARCH_ARM64
     uint64x1_t is_reset_any =
         vreinterpret_u64_u32(vqmovn_u64(vreinterpretq_u64_u16(is_reset_simd)));
     if (*reinterpret_cast<const uint64_t*>(&is_reset_any)) {
@@ -1042,9 +1018,6 @@ void PrimitiveProcessor::Get16BitResetIndexUsage(const uint16_t* source, uint32_
     if (*reinterpret_cast<const uint64_t*>(&is_ffff_any)) {
       is_ffff_used_as_vertex_index_out = true;
     }
-#else
-#error SIMD Get16BitResetIndexUsage not implemented.
-#endif  // XE_ARCH
   }
 #endif  // XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
   while (count--) {
@@ -1078,21 +1051,12 @@ bool PrimitiveProcessor::IsResetUsed(const uint32_t* source, uint32_t count,
       SimdVectorU32 source_simd = LoadAlignedVectorU32(source);
       source += kSimdVectorU32Elements;
       SimdVectorU32 low_bits_mask_guest_endian_simd = ReplicateU32(low_bits_mask_guest_endian);
-#if REX_ARCH_AMD64
-      source_simd = _mm_and_si128(source_simd, low_bits_mask_guest_endian_simd);
-      if (_mm_movemask_epi8(_mm_cmpeq_epi32(source_simd, reset_index_guest_endian_simd))) {
-        return true;
-      }
-#elif REX_ARCH_ARM64
       source_simd = vandq_u32(source_simd, low_bits_mask_guest_endian_simd);
       uint64x1_t is_any = vreinterpret_u64_u32(
           vqmovn_u64(vreinterpretq_u64_u32(vceqq_u32(source_simd, reset_index_guest_endian_simd))));
       if (*reinterpret_cast<const uint64_t*>(&is_any)) {
         return true;
       }
-#else
-#error SIMD 32-bit IsResetUsed not implemented.
-#endif  // XE_ARCH
     }
   }
 #endif  // XE_GPU_PRIMITIVE_PROCESSOR_SIMD_SIZE
@@ -1124,14 +1088,7 @@ void PrimitiveProcessor::ReplaceResetIndex16To16(uint16_t* dest, const uint16_t*
       SimdVectorU16 source_simd = LoadAlignedVectorU16(source);
       source += kSimdVectorU16Elements;
       SimdVectorU16 result_simd;
-#if REX_ARCH_AMD64
-      result_simd =
-          _mm_or_si128(source_simd, _mm_cmpeq_epi16(source_simd, reset_index_guest_endian_simd));
-#elif REX_ARCH_ARM64
       result_simd = vorrq_u16(source_simd, vceqq_u16(source_simd, reset_index_guest_endian_simd));
-#else
-#error SIMD ReplaceResetIndex16To16 not implemented.
-#endif  // XE_ARCH
       StoreUnalignedVectorU16(dest, result_simd);
       dest += kSimdVectorU16Elements;
     }
@@ -1168,23 +1125,11 @@ void PrimitiveProcessor::ReplaceResetIndex16To24(uint32_t* dest, const uint16_t*
       //    0x0000FFFF if the original index buffer had 0xFFFF, but the
       //    primitive reset index is different).
       // 4) Store.
-#if REX_ARCH_AMD64
-      __m128i are_reset = _mm_cmpeq_epi16(source_simd, reset_index_guest_endian_simd);
-      __m128i result = _mm_or_si128(source_simd, are_reset);
-      StoreUnalignedVectorU32(dest, _mm_unpacklo_epi16(result, are_reset));
-      // Expecting kSimdVectorU16Elements / 2 to be in the immediate offset
-      // part of the address.
-      StoreUnalignedVectorU32(dest + kSimdVectorU16Elements / 2,
-                              _mm_unpackhi_epi16(result, are_reset));
-#elif REX_ARCH_ARM64
       // Interleaving the indices and 0 / 0xFFFF via st2.
       uint16x8x2_t result;
       result.val[1] = vceqq_u16(source_simd, reset_index_guest_endian_simd);
       result.val[0] = vorrq_u16(source_simd, result.val[1]);
       vst2q_u16(reinterpret_cast<uint16_t*>(dest), result);
-#else
-#error SIMD ReplaceResetIndex16To24 not implemented.
-#endif  // XE_ARCH
       dest += kSimdVectorU16Elements;
     }
   }

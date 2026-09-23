@@ -60,12 +60,10 @@ target_compile_options(unit_tests PRIVATE
 set_target_properties(unit_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY $<TARGET_FILE_DIR:rexruntime>
 )
-if(UNIX AND NOT APPLE)
-    set_target_properties(unit_tests PROPERTIES
-        INSTALL_RPATH "$ORIGIN"
-        BUILD_WITH_INSTALL_RPATH ON
-    )
-endif()
+set_target_properties(unit_tests PROPERTIES
+    INSTALL_RPATH "$ORIGIN"
+    BUILD_WITH_INSTALL_RPATH ON
+)
 
 # Discover tests
 include(Catch)

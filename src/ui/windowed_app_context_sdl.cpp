@@ -41,12 +41,7 @@ bool SDLWindowedAppContext::Initialize() {
   // Picked before SDL_InitSubSystem, long before a graphics instance can say
   // which surface extensions it has, so the cvar is the escape hatch.
   std::string requested_driver = REXCVAR_GET(video_driver);
-#if REX_PLATFORM_MAC
-  // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
-  if (requested_driver.empty()) {
-    requested_driver = "cocoa";
-  }
-#endif
+
   if (!requested_driver.empty()) {
     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, requested_driver.c_str());
   }
@@ -102,14 +97,7 @@ void SDLWindowedAppContext::ProcessEvent(SDL_Event& event) {
     return;
   }
   if (event.type == paint_event_type_) {
-    // Cocoa may enqueue its quit request behind an already queued paint. Once
-    // termination has been requested, CAMetalLayer may stop supplying
-    // drawables, so entering the paint first can block forever in
-    // -[CAMetalLayer nextDrawable] and prevent the quit event from being
-    // processed. Give an already queued quit request priority over rendering.
-    // Pump explicitly because a continuous stream of custom paint events can
-    // otherwise keep SDL_WaitEvent from returning to Cocoa to collect the
-    // application-menu quit request.
+    // Give an already queued quit request priority over rendering.
     SDL_PumpEvents();
     SDL_Event quit_event{};
     if (SDL_PeepEvents(&quit_event, 1, SDL_GETEVENT, SDL_EVENT_QUIT, SDL_EVENT_QUIT) > 0) {
@@ -183,9 +171,7 @@ void SDLWindowedAppContext::ProcessEvent(SDL_Event& event) {
 bool SDLCALL SDLWindowedAppContext::WatchEvent(void* userdata, SDL_Event* event) {
   auto* context = static_cast<SDLWindowedAppContext*>(userdata);
   if (event->type == SDL_EVENT_QUIT && SDL_IsMainThread() && context->IsInUIThread()) {
-    // Cocoa stops making Metal drawables available as part of its termination
-    // request. Handle the request synchronously while SDL is queueing it,
-    // before rendering can enter another blocking nextDrawable call.
+    // Handle termination request synchronously while SDL is queueing it.
     ++context->synchronously_handled_quit_events_;
     context->ProcessQuitRequest();
   }

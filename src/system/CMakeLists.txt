@@ -53,7 +53,7 @@ add_library(rex::runtime ALIAS rexruntime)
 add_library(rex::system ALIAS rexruntime)
 add_library(rex::kernel ALIAS rexruntime)
 
-set_target_properties(rexruntime PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+
 
 rex_target_pch(rexruntime
     <mutex>
@@ -105,16 +105,7 @@ if(REXGLUE_ENABLE_PERF_COUNTERS)
         $<$<NOT:$<CONFIG:Release>>:REXGLUE_ENABLE_PERF_COUNTERS>)
 endif()
 
-if(WIN32)
-    target_link_libraries(rexruntime PRIVATE ws2_32)
-    target_link_libraries(rexruntime PUBLIC dxgi dxguid)
-    target_compile_definitions(rexruntime PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-endif()
 
-if(REXGLUE_USE_D3D12)
-    target_link_libraries(rexruntime PUBLIC dxc-headers)
-    target_compile_definitions(rexruntime PUBLIC REX_HAS_D3D12=1)
-endif()
 if(REXGLUE_USE_VULKAN)
     target_link_libraries(rexruntime PUBLIC
         Vulkan::Headers

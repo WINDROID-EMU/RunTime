@@ -19,17 +19,10 @@
 
 #include <rex/net/socket.h>
 
-// Standard socket types used by Xbox API emulation
-#if REX_PLATFORM_WIN32
-#include <WinSock2.h>
-
-#include <WS2tcpip.h>
-#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <sys/socket.h>
-#endif
 
 namespace rex::system {
 

@@ -27,11 +27,7 @@
 #include <rex/platform.h>
 #include <rex/platform/env.h>
 
-#if REX_PLATFORM_WIN32
-#include <spdlog/sinks/msvc_sink.h>
-#else
 #include <spdlog/sinks/stdout_sinks.h>
-#endif
 
 REXCVAR_DEFINE_STRING(log_level, "info", "Log",
                       "Global log level: trace, debug, info, warn, error, critical, off")
@@ -148,11 +144,7 @@ void InitLoggingEarly() {
   if (g_early_initialized || g_initialized)
     return;
 
-#if REX_PLATFORM_WIN32
-  auto sink = std::make_shared<spdlog::sinks::msvc_sink_mt>();
-#else
   auto sink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
-#endif
   sink->set_level(spdlog::level::trace);
   sink->set_pattern("[%l] [%n] %v");
   g_early_sink = sink;
@@ -193,12 +185,6 @@ void InitLogging(const LogConfig& config) {
 
   g_config = config;
 
-  // Early sink handling:
-  //   Windows: the early msvc_sink is the persistent debug channel for GUI
-  //     apps and does not conflict with the stdout console sink, so keep it.
-  //   Non-Windows: drop the early stdout sink unconditionally so file-only
-  //     configs don't leak to stdout and console configs don't duplicate.
-#if !REX_PLATFORM_WIN32
   if (g_early_sink) {
     for (auto& entry : g_registry) {
       if (entry.logger)
@@ -206,7 +192,6 @@ void InitLogging(const LogConfig& config) {
     }
     g_early_sink.reset();
   }
-#endif
 
   // Console sink (stdout, colored). Intended for console-subsystem processes.
   if (config.log_to_console) {
