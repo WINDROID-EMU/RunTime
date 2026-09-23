@@ -302,19 +302,16 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
     if (fsi_path_supported) {
       REXGPU_WARN(
           "VulkanRenderTargetCache: Host render target 16-bit formats are unsupported "
-          "(R16G16: {}, R16G16B16A16: {}); switching to fragment shader interlock "
-          "path for D3D12 parity",
+          "(R16G16: {}, R16G16B16A16: {}); switching to fragment shader interlock path",
           color_rg16_draw_format_supported ? "available" : "unavailable",
           color_rgba16_draw_format_supported ? "available" : "unavailable");
       path_ = Path::kPixelShaderInterlock;
     } else {
-      REXGPU_ERROR(
-          "VulkanRenderTargetCache: Host render target 16-bit formats are unsupported "
-          "(R16G16: {}, R16G16B16A16: {}), and fragment shader interlock fallback "
-          "is unavailable",
+      REXGPU_WARN(
+          "VulkanRenderTargetCache: Host render target 16-bit formats are not fully supported "
+          "(R16G16: {}, R16G16B16A16: {}); continuing with available float fallbacks",
           color_rg16_draw_format_supported ? "available" : "unavailable",
           color_rgba16_draw_format_supported ? "available" : "unavailable");
-      return false;
     }
   }
   if (path_ == Path::kHostRenderTargets && gamma_render_target_as_unorm16_requested &&
@@ -323,14 +320,13 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
       REXGPU_WARN(
           "VulkanRenderTargetCache: R16G16B16A16_UNORM render target support "
           "is unavailable for k_8_8_8_8_GAMMA linear storage; switching to "
-          "fragment shader interlock path for D3D12 parity");
+          "fragment shader interlock path");
       path_ = Path::kPixelShaderInterlock;
     } else {
-      REXGPU_ERROR(
+      REXGPU_WARN(
           "VulkanRenderTargetCache: R16G16B16A16_UNORM render target support "
-          "is unavailable for k_8_8_8_8_GAMMA linear storage, and fragment "
-          "shader interlock fallback is unavailable");
-      return false;
+          "is unavailable for k_8_8_8_8_GAMMA linear storage; continuing with standard gamma FBO");
+      gamma_render_target_as_unorm16_requested = false;
     }
   }
   VkFormatProperties color_rg16_uint_properties;
@@ -403,14 +399,12 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
       REXGPU_WARN(
           "VulkanRenderTargetCache: Host render target ownership transfers "
           "can't be bit-exact on this device; switching to fragment shader "
-          "interlock path for D3D12 parity");
+          "interlock path");
       path_ = Path::kPixelShaderInterlock;
     } else {
-      REXGPU_ERROR(
-          "VulkanRenderTargetCache: Bit-exact host render target ownership "
-          "transfers require UINT transfer formats and integer sampled-image "
-          "MSAA support, and fragment shader interlock fallback is unavailable");
-      return false;
+      REXGPU_WARN(
+          "VulkanRenderTargetCache: Host render target ownership transfers "
+          "are not bit-exact on this mobile device; continuing with host FBO path");
     }
   }
 
@@ -965,6 +959,8 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
               sizeof(last_update_framebuffer_attachments_));
   last_update_framebuffer_ = VK_NULL_HANDLE;
   last_update_stencil_enable_ = false;
+  last_update_color_mask_ = 0xFFFFFFFF;
+  last_update_depth_write_ = true;
 
   InitializeCommon();
   return true;
@@ -1426,6 +1422,18 @@ bool VulkanRenderTargetCache::Update(bool is_rasterization_done,
             depth_and_color_render_targets[4]->key().GetColorFormat();
       }
 
+      // Otimização Adreno GMEM / TBDR:
+      // Se a escrita de profundidade e stencil estiver desativada neste draw/pass,
+      // marcar depth_store_dont_care = 1 para evitar flush do buffer da GMEM para a RAM.
+      if (!normalized_depth_control.z_write_enable && !normalized_depth_control.stencil_enable) {
+        render_pass_key.depth_store_dont_care = 1;
+      }
+      // Se a máscara de escrita de cor for 0 (ex: passes intermediários de profundidade / shadow maps),
+      // nenhum dado de cor é modificado, dispensando o STORE de cor para a RAM.
+      if (!normalized_color_mask) {
+        render_pass_key.color_store_dont_care = 1;
+      }
+
       const Framebuffer* framebuffer = last_update_framebuffer_;
       VkRenderPass render_pass = last_update_render_pass_key_ == render_pass_key
                                      ? last_update_render_pass_
@@ -1467,6 +1475,8 @@ bool VulkanRenderTargetCache::Update(bool is_rasterization_done,
                   sizeof(last_update_framebuffer_attachments_));
       last_update_framebuffer_ = framebuffer;
       last_update_stencil_enable_ = normalized_depth_control.stencil_enable != 0;
+      last_update_color_mask_ = normalized_color_mask;
+      last_update_depth_write_ = normalized_depth_control.z_write_enable != 0;
 
       // Transition the used render targets.
       for (uint32_t i = 0; i < 1 + xenos::kMaxColorRenderTargets; ++i) {
@@ -1534,7 +1544,10 @@ void VulkanRenderTargetCache::GetLastUpdateRenderingAttachments(
     depth_attachment->resolveImageView = VK_NULL_HANDLE;
     depth_attachment->resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     depth_attachment->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depth_attachment->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    // Otimização Adreno / TBDR:
+    // Se a escrita no buffer de profundidade estiver desativada, não precisa fazer STORE na RAM!
+    depth_attachment->storeOp = last_update_depth_write_ ? VK_ATTACHMENT_STORE_OP_STORE
+                                                         : VK_ATTACHMENT_STORE_OP_DONT_CARE;
     if (last_update_stencil_enable_) {
       *stencil_attachment = *depth_attachment;
     } else {
@@ -1558,7 +1571,12 @@ void VulkanRenderTargetCache::GetLastUpdateRenderingAttachments(
       color_attachment.resolveImageView = VK_NULL_HANDLE;
       color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
       color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-      color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      // Otimização Adreno / TBDR:
+      // Se a máscara de cor para este render target for 0 (desenho apenas de profundidade/stencil, ex: shadow maps),
+      // descartar a escrita de cor para evitar flush desnecessário da GMEM para a RAM.
+      bool color_write_enabled = (last_update_color_mask_ & (0xFu << (i * 4))) != 0;
+      color_attachment.storeOp = color_write_enabled ? VK_ATTACHMENT_STORE_OP_STORE
+                                                     : VK_ATTACHMENT_STORE_OP_DONT_CARE;
       color_attachment.clearValue = {};
       color_attachment_count = i + 1;
     }
@@ -1597,9 +1615,12 @@ VkRenderPass VulkanRenderTargetCache::GetHostRenderTargetsRenderPass(RenderPassK
     attachment.format = GetDepthVulkanFormat(key.depth_format);
     attachment.samples = samples;
     attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    // Otimização Adreno / TBDR: descartar escrita de profundidade quando inalterada
+    attachment.storeOp = key.depth_store_dont_care ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                                   : VK_ATTACHMENT_STORE_OP_STORE;
     attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilStoreOp = key.depth_store_dont_care ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                                          : VK_ATTACHMENT_STORE_OP_STORE;
     attachment.initialLayout = VulkanRenderTarget::kDepthDrawLayout;
     attachment.finalLayout = VulkanRenderTarget::kDepthDrawLayout;
   }
@@ -1628,7 +1649,9 @@ VkRenderPass VulkanRenderTargetCache::GetHostRenderTargetsRenderPass(RenderPassK
                             : GetColorVulkanFormat(color_format);
     attachment.samples = samples;
     attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    // Otimização Adreno / TBDR: descartar escrita de cor se a máscara for 0 (ex: shadow maps)
+    attachment.storeOp = key.color_store_dont_care ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                                   : VK_ATTACHMENT_STORE_OP_STORE;
     attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachment.initialLayout = VulkanRenderTarget::kColorDrawLayout;

@@ -61,9 +61,10 @@ SpirvShaderTranslator::Features::Features(const ui::vulkan::VulkanDevice* const 
       demote_to_helper_invocation(vulkan_device->properties().shaderDemoteToHelperInvocation),
       sample_rate_shading(vulkan_device->properties().sampleRateShading) {
   const uint32_t vulkan_api_version = vulkan_device->properties().apiVersion;
-  if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
+  if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 3, 0)) {
     spirv_version = spv::Spv_1_5;
-  } else if (vulkan_device->extensions().ext_1_2_KHR_spirv_1_4) {
+  } else if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 2, 0) ||
+             vulkan_device->extensions().ext_1_2_KHR_spirv_1_4) {
     spirv_version = spv::Spv_1_4;
   } else if (vulkan_api_version >= VK_MAKE_API_VERSION(0, 1, 1, 0)) {
     spirv_version = spv::Spv_1_3;

@@ -125,6 +125,31 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+
+  // Not handled by any custom handler. Forward to original handler or SIG_DFL
+  // to avoid infinite re-fault loop on the same instruction.
+  if (signal_number == SIGSEGV) {
+    if ((original_sigsegv_handler_.sa_flags & SA_SIGINFO) && original_sigsegv_handler_.sa_sigaction) {
+      original_sigsegv_handler_.sa_sigaction(signal_number, signal_info, signal_context);
+      return;
+    } else if (original_sigsegv_handler_.sa_handler != SIG_DFL &&
+               original_sigsegv_handler_.sa_handler != SIG_IGN &&
+               original_sigsegv_handler_.sa_handler != nullptr) {
+      original_sigsegv_handler_.sa_handler(signal_number);
+      return;
+    }
+  } else if (signal_number == SIGILL) {
+    if ((original_sigill_handler_.sa_flags & SA_SIGINFO) && original_sigill_handler_.sa_sigaction) {
+      original_sigill_handler_.sa_sigaction(signal_number, signal_info, signal_context);
+      return;
+    } else if (original_sigill_handler_.sa_handler != SIG_DFL &&
+               original_sigill_handler_.sa_handler != SIG_IGN &&
+               original_sigill_handler_.sa_handler != nullptr) {
+      original_sigill_handler_.sa_handler(signal_number);
+      return;
+    }
+  }
+  signal(signal_number, SIG_DFL);
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {

@@ -31,7 +31,7 @@
 // TODO(benvanik): move xbox.h out
 #include <rex/system/xtypes.h>
 
-REXCVAR_DEFINE_BOOL(protect_zero, true, "Memory", "Protect the zero page from reads and writes")
+REXCVAR_DEFINE_BOOL(protect_zero, false, "Memory", "Protect the zero page from reads and writes")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(protect_on_release, false, "Memory",
@@ -189,11 +189,21 @@ bool Memory::Initialize() {
                               0x1FD00000, 4096, &heaps_.physical);
 
   // Protect the first and last 64kb of memory.
+  // On Android, always keep the zero page (0x00000000 - 0x00010000) read/write and zeroed
+  // to avoid SIGSEGV loops when guest code performs uninitialized pointer reads.
+#if REX_PLATFORM_ANDROID
+  heaps_.v00000000.AllocFixed(0x00000000, 0x10000, 0x10000,
+                              memory::kMemoryAllocationReserve | memory::kMemoryAllocationCommit,
+                              memory::kMemoryProtectRead | memory::kMemoryProtectWrite);
+  rex::memory::Protect(virtual_membase_, 0x10000, rex::memory::PageAccess::kReadWrite, nullptr);
+  std::memset(virtual_membase_, 0, 0x10000);
+#else
   heaps_.v00000000.AllocFixed(0x00000000, 0x10000, 0x10000,
                               memory::kMemoryAllocationReserve | memory::kMemoryAllocationCommit,
                               !REXCVAR_GET(protect_zero)
                                   ? memory::kMemoryProtectRead | memory::kMemoryProtectWrite
                                   : memory::kMemoryProtectNoAccess);
+#endif
   heaps_.physical.AllocFixed(0x1FFF0000, 0x10000, 0x10000, memory::kMemoryAllocationReserve,
                              memory::kMemoryProtectNoAccess);
 
@@ -486,6 +496,18 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
   uint32_t virtual_address = HostToGuestVirtual(host_address);
   BaseHeap* heap = LookupHeap(virtual_address);
   if (!heap || heap->heap_type() != memory::HeapType::kGuestPhysical) {
+    if (virtual_address < 0x10000) {
+      size_t host_page_size = rex::memory::page_size();
+      uintptr_t page_base =
+          reinterpret_cast<uintptr_t>(host_address) & ~(uintptr_t(host_page_size - 1));
+      rex::memory::Protect(reinterpret_cast<void*>(page_base), host_page_size,
+                           rex::memory::PageAccess::kReadWrite, nullptr);
+      std::memset(reinterpret_cast<void*>(page_base), 0, host_page_size);
+      REXSYS_WARN("Recovered zero-page {} at guest 0x{:08X} (host 0x{:016X})",
+                  is_write ? "write" : "read", virtual_address,
+                  reinterpret_cast<uintptr_t>(host_address));
+      return true;
+    }
     REXSYS_ERROR(
         "Unhandled guest access violation: {} of guest 0x{:08X} (host 0x{:016X}) on thread 0x{:X}",
         is_write ? "write" : "read", virtual_address, reinterpret_cast<uintptr_t>(host_address),

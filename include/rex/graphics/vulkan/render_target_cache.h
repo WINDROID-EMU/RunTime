@@ -65,6 +65,8 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
       xenos::ColorRenderTargetFormat color_3_view_format
           : xenos::kColorRenderTargetFormatBits;    // 24
       uint32_t color_rts_use_transfer_formats : 1;  // 25
+      uint32_t depth_store_dont_care : 1;           // 26
+      uint32_t color_store_dont_care : 1;           // 27
     };
     uint32_t key = 0;
     struct Hasher {
@@ -282,6 +284,8 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
       last_update_framebuffer_attachments_[1 + xenos::kMaxColorRenderTargets] = {};
   const Framebuffer* last_update_framebuffer_ = VK_NULL_HANDLE;
   bool last_update_stencil_enable_ = false;
+  uint32_t last_update_color_mask_ = 0xFFFFFFFF;
+  bool last_update_depth_write_ = true;
 
   // For host render targets.
 

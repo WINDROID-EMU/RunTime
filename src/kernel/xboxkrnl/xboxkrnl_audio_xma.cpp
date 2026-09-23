@@ -13,6 +13,9 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <cstring>
+#include <atomic>
+#include <chrono>
+#include <mutex>
 
 #include <rex/assert.h>
 #include <rex/audio/audio_system.h>
@@ -288,6 +291,15 @@ u32 XMASetInputBuffer1Valid_entry(mapped_void context_ptr) {
 
 u32 XMAIsOutputBufferValid_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
+  if (context.output_buffer_valid &&
+      !context.input_buffer_0_valid && !context.input_buffer_1_valid &&
+      context.output_buffer_write_offset == context.output_buffer_read_offset) {
+    context.output_buffer_valid = 0;
+    context.Store(context_ptr);
+    REXAPU_WARN("[desatasco] ctx={:08X} inputs empty and output fully read. Ending voice buffer.",
+                context_ptr.guest_address());
+    return 0;
+  }
   return context.output_buffer_valid;
 }
 
@@ -307,6 +319,11 @@ u32 XMAGetOutputBufferReadOffset_entry(mapped_void context_ptr) {
 u32 XMASetOutputBufferReadOffset_entry(mapped_void context_ptr, u32 value) {
   XMA_CONTEXT_DATA context(context_ptr);
   context.output_buffer_read_offset = value;
+  if (context.output_buffer_valid &&
+      !context.input_buffer_0_valid && !context.input_buffer_1_valid &&
+      context.output_buffer_write_offset == value) {
+    context.output_buffer_valid = 0;
+  }
   context.Store(context_ptr);
 
   return 0;
@@ -314,6 +331,67 @@ u32 XMASetOutputBufferReadOffset_entry(mapped_void context_ptr, u32 value) {
 
 u32 XMAGetOutputBufferWriteOffset_entry(mapped_void context_ptr) {
   XMA_CONTEXT_DATA context(context_ptr);
+
+  const uint32_t direccion = context_ptr.guest_address();
+  const bool inputs_empty = !context.input_buffer_0_valid && !context.input_buffer_1_valid;
+
+  if (context.output_buffer_valid && inputs_empty) {
+    if (context.output_buffer_write_offset == context.output_buffer_read_offset) {
+      context.output_buffer_valid = 0;
+      context.Store(context_ptr);
+      return context.output_buffer_write_offset;
+    }
+
+    const int64_t ahora = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count();
+
+    struct ContextWatch {
+      uint32_t addr;
+      int64_t start_time;
+    };
+    static ContextWatch watches[32]{};
+    static std::mutex watch_mutex;
+
+    std::lock_guard<std::mutex> lock(watch_mutex);
+    int slot = -1;
+    for (int i = 0; i < 32; ++i) {
+      if (watches[i].addr == direccion) {
+        slot = i;
+        break;
+      }
+    }
+
+    if (slot == -1) {
+      for (int i = 0; i < 32; ++i) {
+        if (watches[i].addr == 0) {
+          slot = i;
+          break;
+        }
+      }
+      if (slot == -1) slot = 0;
+      watches[slot].addr = direccion;
+      watches[slot].start_time = ahora;
+    } else {
+      const int64_t llevo = ahora - watches[slot].start_time;
+      if (llevo > 50) {
+        REXAPU_WARN(
+            "[desatasco] ctx={:08X} lleva {} ms girando sin entrada "
+            "(escritura={} lectura={}). Le digo que el buffer esta terminado.",
+            direccion, llevo, uint32_t(context.output_buffer_write_offset),
+            uint32_t(context.output_buffer_read_offset));
+
+        context.output_buffer_write_offset = context.output_buffer_read_offset;
+        context.output_buffer_valid = 0;
+        context.Store(context_ptr);
+
+        watches[slot].addr = 0;
+        watches[slot].start_time = 0;
+        return context.output_buffer_write_offset;
+      }
+    }
+  }
+
   return context.output_buffer_write_offset;
 }
 
