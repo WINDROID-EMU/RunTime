@@ -29,8 +29,13 @@
 REXCVAR_DEFINE_BOOL(host_present_from_non_ui_thread, true, "UI/Presenter",
                     "Allow presentation from non-UI thread");
 
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_BOOL(present_letterbox, false, "UI/Presenter",
+                    "Enable letterboxing for non-native aspect ratios");
+#else
 REXCVAR_DEFINE_BOOL(present_letterbox, true, "UI/Presenter",
                     "Enable letterboxing for non-native aspect ratios");
+#endif
 
 REXCVAR_DEFINE_INT32(present_safe_area_x, 90, "UI/Presenter",
                      "Horizontal safe area percentage (0-100)")
@@ -886,7 +891,13 @@ Presenter::GuestOutputPaintFlow Presenter::GetGuestOutputPaintFlow(
   // All host location calculations are DPI-independent, conceptually depending
   // only on the aspect ratios, not the absolute values.
   uint32_t output_width, output_height;
-  if (uint64_t(surface_width_in_paint_connection_) * properties.display_aspect_ratio_y >
+  if (!REXCVAR_GET(present_letterbox)) {
+    // Tela estendida: preenche 100% da tela do aparelho sem barras pretas nem cortes
+    output_width = surface_width_in_paint_connection_;
+    output_height = surface_height_in_paint_connection_;
+    flow.output_x = 0;
+    flow.output_y = 0;
+  } else if (uint64_t(surface_width_in_paint_connection_) * properties.display_aspect_ratio_y >
       uint64_t(surface_height_in_paint_connection_) * properties.display_aspect_ratio_x) {
     // The window is wider that the source - crop along Y to preserve the aspect
     // ratio while stretching throughout the entire surface's width, then limit

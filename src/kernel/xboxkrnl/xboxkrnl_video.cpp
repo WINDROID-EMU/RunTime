@@ -238,8 +238,13 @@ void VdQueryVideoMode(X_VIDEO_MODE* video_mode) {
   video_mode->display_width = display_width;
   video_mode->display_height = display_height;
   video_mode->is_interlaced = 0;
+#if defined(__ANDROID__)
+  video_mode->is_widescreen = 1;
+  video_mode->is_hi_def = 1;
+#else
   video_mode->is_widescreen = display_width * 3 >= display_height * 4;
   video_mode->is_hi_def = display_width >= 1280 || display_height >= 720;
+#endif
   video_mode->refresh_rate = refresh_rate_hz;
   video_mode->video_standard = 1;  // NTSC
   video_mode->unknown_0x8a = 0x4A;
@@ -258,6 +263,9 @@ u32 VdQueryVideoFlags_entry() {
   flags |= mode.is_widescreen ? 1 : 0;
   flags |= mode.display_width >= 1024 ? 2 : 0;
   flags |= mode.display_width >= 1920 ? 4 : 0;
+#if defined(__ANDROID__)
+  flags |= 1;  // Bit 0: Widescreen mode
+#endif
 
   return flags;
 }
