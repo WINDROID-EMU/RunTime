@@ -2962,6 +2962,17 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
   telemetry_window_.pipeline_binds += telemetry_current_frame_.pipeline_binds;
   telemetry_window_.fence_wait_ns += telemetry_current_frame_.fence_wait_ns;
   telemetry_window_.draw_cpu_ns += telemetry_current_frame_.draw_cpu_ns;
+  telemetry_window_.draw_prim_cpu_ns += telemetry_current_frame_.draw_prim_cpu_ns;
+  telemetry_window_.draw_rt_cpu_ns += telemetry_current_frame_.draw_rt_cpu_ns;
+  telemetry_window_.draw_pipe_cpu_ns += telemetry_current_frame_.draw_pipe_cpu_ns;
+  telemetry_window_.draw_bind_cpu_ns += telemetry_current_frame_.draw_bind_cpu_ns;
+  telemetry_window_.rp_barrier += telemetry_current_frame_.rp_barrier;
+  telemetry_window_.rp_fb += telemetry_current_frame_.rp_fb;
+  telemetry_window_.rp_pass += telemetry_current_frame_.rp_pass;
+  telemetry_window_.rp_transfer += telemetry_current_frame_.rp_transfer;
+  telemetry_window_.barrier_shmem += telemetry_current_frame_.barrier_shmem;
+  telemetry_window_.barrier_other_buf += telemetry_current_frame_.barrier_other_buf;
+  telemetry_window_.barrier_img += telemetry_current_frame_.barrier_img;
   telemetry_window_.resolve_cpu_ns += telemetry_current_frame_.resolve_cpu_ns;
   telemetry_window_.queue_submit_ns += telemetry_current_frame_.queue_submit_ns;
   telemetry_window_.swap_cpu_ns += telemetry_current_frame_.swap_cpu_ns;
@@ -2985,15 +2996,34 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
       double avg_binds = (double)telemetry_window_.pipeline_binds / n_frames;
       double avg_fence_wait_ms = ((double)telemetry_window_.fence_wait_ns / 1000000.0) / n_frames;
       double avg_draw_ms = ((double)telemetry_window_.draw_cpu_ns / 1000000.0) / n_frames;
+      double avg_prim_ms = ((double)telemetry_window_.draw_prim_cpu_ns / 1000000.0) / n_frames;
+      double avg_rt_ms = ((double)telemetry_window_.draw_rt_cpu_ns / 1000000.0) / n_frames;
+      double avg_pipe_ms = ((double)telemetry_window_.draw_pipe_cpu_ns / 1000000.0) / n_frames;
+      double avg_bind_ms = ((double)telemetry_window_.draw_bind_cpu_ns / 1000000.0) / n_frames;
+      double avg_rp_bar = (double)telemetry_window_.rp_barrier / n_frames;
+      double avg_rp_fb = (double)telemetry_window_.rp_fb / n_frames;
+      double avg_rp_pass = (double)telemetry_window_.rp_pass / n_frames;
+      double avg_rp_xfer = (double)telemetry_window_.rp_transfer / n_frames;
       double avg_resolve_ms = ((double)telemetry_window_.resolve_cpu_ns / 1000000.0) / n_frames;
       double avg_submit_ms = ((double)telemetry_window_.queue_submit_ns / 1000000.0) / n_frames;
       double avg_swap_ms = ((double)telemetry_window_.swap_cpu_ns / 1000000.0) / n_frames;
+
+      double avg_bar_shmem = (double)telemetry_window_.barrier_shmem / n_frames;
+      double avg_bar_other_buf = (double)telemetry_window_.barrier_other_buf / n_frames;
+      double avg_bar_img = (double)telemetry_window_.barrier_img / n_frames;
 
 #if defined(__ANDROID__)
       __android_log_print(ANDROID_LOG_INFO, "REX_GPU_PROF",
           "[GPU_TELEMETRY] FPS: %.1f | FenceWait: %.2fms | CPU(Draw: %.2fms, Copy: %.2fms, Sub: %.2fms, Swap: %.2fms) | Draws/f: %.0f (Vtx: %.1fk) | Resolves/f: %.0f | Passes/f: %.0f | PipeBinds/f: %.0f",
           fps, avg_fence_wait_ms, avg_draw_ms, avg_resolve_ms, avg_submit_ms, avg_swap_ms,
           avg_draws, avg_vtx, avg_resolves, avg_passes, avg_binds);
+      __android_log_print(ANDROID_LOG_INFO, "REX_GPU_PROF",
+          "[GPU_TELEMETRY] Sub-Draw: Prim: %.2fms | RT: %.2fms | Pipe: %.2fms | Bind: %.2fms | RP(Bar: %.0f, FB: %.0f, Pass: %.0f, Xfer: %.0f)",
+          avg_prim_ms, avg_rt_ms, avg_pipe_ms, avg_bind_ms,
+          avg_rp_bar, avg_rp_fb, avg_rp_pass, avg_rp_xfer);
+      __android_log_print(ANDROID_LOG_INFO, "REX_GPU_PROF",
+          "[GPU_TELEMETRY] Barriers: ShmemBuf: %.0f | OtherBuf: %.0f | Img: %.0f",
+          avg_bar_shmem, avg_bar_other_buf, avg_bar_img);
 #endif
       REXGPU_INFO(
           "[GPU_TELEMETRY] FPS: {:.1f} | FenceWait: {:.2f}ms | CPU(Draw: {:.2f}ms, Copy: {:.2f}ms, Sub: {:.2f}ms, Swap: {:.2f}ms) | Draws/f: {:.0f} (Vtx: {:.1f}k) | Resolves/f: {:.0f} | Passes/f: {:.0f} | PipeBinds/f: {:.0f}",
@@ -3138,16 +3168,53 @@ bool VulkanCommandProcessor::SubmitBarriers(bool force_end_render_pass) {
     }
     return false;
   }
-  EndRenderPass();
+  for (const auto& b : pending_barriers_buffer_memory_barriers_) {
+    if (shared_memory_ && b.buffer == shared_memory_->buffer()) {
+      ++telemetry_current_frame_.barrier_shmem;
+    } else {
+      ++telemetry_current_frame_.barrier_other_buf;
+    }
+  }
+  telemetry_current_frame_.barrier_img += uint32_t(pending_barriers_image_memory_barriers_.size());
+
+  bool can_stay_in_render_pass = in_render_pass_ && !force_end_render_pass &&
+                                 pending_barriers_image_memory_barriers_.empty();
+  if (!can_stay_in_render_pass) {
+    EndRenderPass();
+  }
+
+  constexpr VkPipelineStageFlags kGraphicsStages =
+      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT |
+      VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
+      VK_PIPELINE_STAGE_VERTEX_INPUT_BIT |
+      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+      VK_PIPELINE_STAGE_TESSELLATION_CONTROL_SHADER_BIT |
+      VK_PIPELINE_STAGE_TESSELLATION_EVALUATION_SHADER_BIT |
+      VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT |
+      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+      VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+      VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+
   for (auto it = pending_barriers_.cbegin(); it != pending_barriers_.cend(); ++it) {
     auto it_next = std::next(it);
     bool is_last = it_next == pending_barriers_.cend();
+
+    VkPipelineStageFlags src_mask = it->src_stage_mask;
+    VkPipelineStageFlags dst_mask = it->dst_stage_mask;
+    if (in_render_pass_) {
+      src_mask &= kGraphicsStages;
+      dst_mask &= kGraphicsStages;
+    }
+    if (!src_mask) src_mask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    if (!dst_mask) dst_mask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+
     // .data() + offset, not &[offset], for buffer and image barriers, because
     // if there are no buffer or image memory barriers in the last pipeline
     // barriers, the offsets may be equal to the sizes of the vectors.
     deferred_command_buffer_.CmdVkPipelineBarrier(
-        it->src_stage_mask ? it->src_stage_mask : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        it->dst_stage_mask ? it->dst_stage_mask : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
+        src_mask, dst_mask, 0, 0,
         nullptr,
         uint32_t((is_last ? pending_barriers_buffer_memory_barriers_.size()
                           : it_next->buffer_memory_barriers_offset) -
@@ -3168,7 +3235,7 @@ bool VulkanCommandProcessor::SubmitBarriers(bool force_end_render_pass) {
 
 void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
     VkRenderPass render_pass, const VulkanRenderTargetCache::Framebuffer* framebuffer) {
-  SubmitBarriers(false);
+  bool had_barriers = SubmitBarriers(false);
   const ui::vulkan::VulkanDevice* vulkan_device = GetVulkanDevice();
   bool use_dynamic_rendering =
       REXCVAR_GET(vulkan_dynamic_rendering) && vulkan_device->properties().dynamicRendering;
@@ -3181,9 +3248,17 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
       return;
     }
   } else {
-    if (current_render_pass_ == render_pass && current_framebuffer_ == framebuffer) {
+    if (in_render_pass_ && current_render_pass_ == render_pass && current_framebuffer_ == framebuffer) {
       return;
     }
+  }
+
+  if (had_barriers) {
+    ++telemetry_current_frame_.rp_barrier;
+  } else if (current_framebuffer_ != framebuffer) {
+    ++telemetry_current_frame_.rp_fb;
+  } else if (current_render_pass_ != render_pass) {
+    ++telemetry_current_frame_.rp_pass;
   }
 
   if (in_render_pass_) {
@@ -3261,6 +3336,8 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
       return;
     }
   }
+
+  ++telemetry_current_frame_.rp_transfer;
 
   if (in_render_pass_) {
     if (use_dynamic_rendering) {
@@ -3802,7 +3879,11 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     }
 
     // Process primitives.
-    if (!primitive_processor_->Process(primitive_processing_result)) {
+    auto prim_start = std::chrono::steady_clock::now();
+    bool prim_ok = primitive_processor_->Process(primitive_processing_result);
+    telemetry_current_frame_.draw_prim_cpu_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - prim_start).count();
+    if (!prim_ok) {
       return draw_fail("primitive_processing");
     }
     if (!primitive_processing_result.host_draw_vertex_count) {
@@ -3933,8 +4014,12 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
 
   const VulkanPipelineCache::PipelineLayoutProvider* pipeline_layout_provider;
   // Set up the render targets - this may perform dispatches and draws.
-  if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
-                                    normalized_color_mask, *vertex_shader)) {
+  auto rt_start = std::chrono::steady_clock::now();
+  bool rt_ok = render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
+                                            normalized_color_mask, *vertex_shader);
+  telemetry_current_frame_.draw_rt_cpu_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - rt_start).count();
+  if (!rt_ok) {
     return draw_fail("render_target_update");
   }
 
@@ -3943,11 +4028,15 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
   // textures.
   VkPipeline pipeline;
   void* pipeline_handle = nullptr;
-  if (!pipeline_cache_->ConfigurePipeline(vertex_shader_translation, pixel_shader_translation,
-                                          primitive_processing_result, normalized_depth_control,
-                                          normalized_color_mask,
-                                          render_target_cache_->last_update_render_pass_key(),
-                                          pipeline, pipeline_layout_provider, &pipeline_handle)) {
+  auto pipe_start = std::chrono::steady_clock::now();
+  bool pipe_ok = pipeline_cache_->ConfigurePipeline(vertex_shader_translation, pixel_shader_translation,
+                                                    primitive_processing_result, normalized_depth_control,
+                                                    normalized_color_mask,
+                                                    render_target_cache_->last_update_render_pass_key(),
+                                                    pipeline, pipeline_layout_provider, &pipeline_handle);
+  telemetry_current_frame_.draw_pipe_cpu_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - pipe_start).count();
+  if (!pipe_ok) {
     return draw_fail("configure_pipeline");
   }
   bool pipeline_is_placeholder = false;
@@ -3983,16 +4072,24 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
           pipeline_layout->descriptor_set_layout_textures_vertex_ref()) {
         descriptor_sets_kept = std::min(
             descriptor_sets_kept, uint32_t(SpirvShaderTranslator::kDescriptorSetTexturesVertex));
+        last_bound_vertex_image_views_.clear();
+        last_bound_vertex_samplers_.clear();
       }
       if (current_guest_graphics_pipeline_layout_->descriptor_set_layout_textures_pixel_ref() !=
           pipeline_layout->descriptor_set_layout_textures_pixel_ref()) {
         descriptor_sets_kept = std::min(
             descriptor_sets_kept, uint32_t(SpirvShaderTranslator::kDescriptorSetTexturesPixel));
+        last_bound_pixel_image_views_.clear();
+        last_bound_pixel_samplers_.clear();
       }
     } else {
       // No or unknown pipeline layout previously bound - all bindings are in an
       // indeterminate state.
       current_graphics_descriptor_sets_bound_up_to_date_ = 0;
+      last_bound_vertex_image_views_.clear();
+      last_bound_vertex_samplers_.clear();
+      last_bound_pixel_image_views_.clear();
+      last_bound_pixel_samplers_.clear();
     }
     current_guest_graphics_pipeline_layout_ = pipeline_layout;
   }
@@ -4068,7 +4165,11 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
 
   // Update uniform buffers and descriptor sets after binding the pipeline with
   // the new layout.
-  if (!UpdateBindings(vertex_shader, pixel_shader)) {
+  auto bind_start = std::chrono::steady_clock::now();
+  bool bind_ok = UpdateBindings(vertex_shader, pixel_shader);
+  telemetry_current_frame_.draw_bind_cpu_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - bind_start).count();
+  if (!bind_ok) {
     return draw_fail("update_bindings");
   }
 
@@ -5092,21 +5193,22 @@ void VulkanCommandProcessor::CheckSubmissionFenceAndDeviceLoss(uint64_t await_su
   size_t fences_total = submissions_in_flight_fences_.size();
   size_t fences_awaited = 0;
   if (await_submission > submission_completed_) {
-    // Await in a blocking way if requested.
-    // TODO(Triang3l): Await only one fence. "Fence signal operations that are
+    // Await the target submission fence in a blocking way if requested.
+    // Vulkan specification guarantees: "Fence signal operations that are
     // defined by vkQueueSubmit additionally include in the first
     // synchronization scope all commands that occur earlier in submission
-    // order."
+    // order." Thus awaiting the single target fence completes all earlier ones.
+    size_t target_fence_index = (await_submission - submission_completed_) - 1;
+    VkFence target_fence = submissions_in_flight_fences_[target_fence_index];
     auto wait_start = std::chrono::steady_clock::now();
     VkResult wait_result =
-        dfn.vkWaitForFences(device, uint32_t(await_submission - submission_completed_),
-                            submissions_in_flight_fences_.data(), VK_TRUE, UINT64_MAX);
+        dfn.vkWaitForFences(device, 1, &target_fence, VK_TRUE, UINT64_MAX);
     telemetry_current_frame_.fence_wait_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - wait_start).count();
     if (wait_result == VK_SUCCESS) {
       fences_awaited += await_submission - submission_completed_;
     } else {
-      REXGPU_ERROR("Failed to await submission completion Vulkan fences");
+      REXGPU_ERROR("Failed to await submission completion Vulkan fence");
       if (wait_result == VK_ERROR_DEVICE_LOST) {
         device_lost_ = true;
       }
@@ -5305,6 +5407,10 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
         shared_memory_and_edram_descriptor_set_;
     current_graphics_descriptor_set_values_up_to_date_ =
         UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetSharedMemoryAndEdram;
+    last_bound_vertex_image_views_.clear();
+    last_bound_vertex_samplers_.clear();
+    last_bound_pixel_image_views_.clear();
+    last_bound_pixel_samplers_.clear();
 
     // Reclaim pool pages - no need to do this every small submission since some
     // may be reused.
@@ -6692,10 +6798,67 @@ bool VulkanCommandProcessor::UpdateBindings(const VulkanShader* vertex_shader,
     sampler_count_pixel = 0;
     texture_count_pixel = 0;
   }
-  // TODO(Triang3l): Reuse texture and sampler bindings if not changed.
-  current_graphics_descriptor_set_values_up_to_date_ &=
-      ~((UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesVertex) |
-        (UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesPixel));
+  // Reuse vertex texture and sampler descriptor set if not changed.
+  bool vertex_textures_changed = false;
+  if (!(current_graphics_descriptor_set_values_up_to_date_ &
+        (UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesVertex)) ||
+      texture_count_vertex != last_bound_vertex_image_views_.size() ||
+      sampler_count_vertex != last_bound_vertex_samplers_.size()) {
+    vertex_textures_changed = true;
+  } else {
+    for (uint32_t vi = 0; vi < texture_count_vertex; ++vi) {
+      const VulkanShader::TextureBinding& tb = textures_vertex[vi];
+      VkImageView view = texture_cache_->GetActiveBindingOrNullImageView(
+          tb.fetch_constant, tb.dimension, bool(tb.is_signed));
+      if (view != last_bound_vertex_image_views_[vi]) {
+        vertex_textures_changed = true;
+        break;
+      }
+    }
+    if (!vertex_textures_changed) {
+      for (uint32_t si = 0; si < sampler_count_vertex; ++si) {
+        if (current_samplers_vertex_[si].second != last_bound_vertex_samplers_[si]) {
+          vertex_textures_changed = true;
+          break;
+        }
+      }
+    }
+  }
+  if (vertex_textures_changed) {
+    current_graphics_descriptor_set_values_up_to_date_ &=
+        ~(UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesVertex);
+  }
+
+  // Reuse pixel texture and sampler descriptor set if not changed.
+  bool pixel_textures_changed = false;
+  if (!(current_graphics_descriptor_set_values_up_to_date_ &
+        (UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesPixel)) ||
+      texture_count_pixel != last_bound_pixel_image_views_.size() ||
+      sampler_count_pixel != last_bound_pixel_samplers_.size()) {
+    pixel_textures_changed = true;
+  } else if (pixel_shader) {
+    for (uint32_t pi = 0; pi < texture_count_pixel; ++pi) {
+      const VulkanShader::TextureBinding& tb = (*textures_pixel)[pi];
+      VkImageView view = texture_cache_->GetActiveBindingOrNullImageView(
+          tb.fetch_constant, tb.dimension, bool(tb.is_signed));
+      if (view != last_bound_pixel_image_views_[pi]) {
+        pixel_textures_changed = true;
+        break;
+      }
+    }
+    if (!pixel_textures_changed) {
+      for (uint32_t si = 0; si < sampler_count_pixel; ++si) {
+        if (current_samplers_pixel_[si].second != last_bound_pixel_samplers_[si]) {
+          pixel_textures_changed = true;
+          break;
+        }
+      }
+    }
+  }
+  if (pixel_textures_changed) {
+    current_graphics_descriptor_set_values_up_to_date_ &=
+        ~(UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesPixel);
+  }
 
   // Make sure new descriptor sets are bound to the command buffer.
 
@@ -6821,6 +6984,22 @@ bool VulkanCommandProcessor::UpdateBindings(const VulkanShader* vertex_shader,
     write_descriptor_set_bits |= UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesVertex;
     current_graphics_descriptor_sets_[SpirvShaderTranslator::kDescriptorSetTexturesVertex] =
         write_textures[0].dstSet;
+
+    last_bound_vertex_image_views_.clear();
+    last_bound_vertex_image_views_.reserve(texture_count_vertex);
+    for (uint32_t vi = 0; vi < texture_count_vertex; ++vi) {
+      last_bound_vertex_image_views_.push_back(
+          descriptor_write_image_info_[vertex_texture_image_info_offset + vi].imageView);
+    }
+    last_bound_vertex_samplers_.clear();
+    last_bound_vertex_samplers_.reserve(sampler_count_vertex);
+    for (uint32_t si = 0; si < sampler_count_vertex; ++si) {
+      last_bound_vertex_samplers_.push_back(
+          descriptor_write_image_info_[vertex_sampler_image_info_offset + si].sampler);
+    }
+  } else if (!texture_count_vertex && !sampler_count_vertex) {
+    last_bound_vertex_image_views_.clear();
+    last_bound_vertex_samplers_.clear();
   }
   // Pixel shader textures and samplers.
   if (write_pixel_textures) {
@@ -6838,6 +7017,22 @@ bool VulkanCommandProcessor::UpdateBindings(const VulkanShader* vertex_shader,
     write_descriptor_set_bits |= UINT32_C(1) << SpirvShaderTranslator::kDescriptorSetTexturesPixel;
     current_graphics_descriptor_sets_[SpirvShaderTranslator::kDescriptorSetTexturesPixel] =
         write_textures[0].dstSet;
+
+    last_bound_pixel_image_views_.clear();
+    last_bound_pixel_image_views_.reserve(texture_count_pixel);
+    for (uint32_t pi = 0; pi < texture_count_pixel; ++pi) {
+      last_bound_pixel_image_views_.push_back(
+          descriptor_write_image_info_[pixel_texture_image_info_offset + pi].imageView);
+    }
+    last_bound_pixel_samplers_.clear();
+    last_bound_pixel_samplers_.reserve(sampler_count_pixel);
+    for (uint32_t si = 0; si < sampler_count_pixel; ++si) {
+      last_bound_pixel_samplers_.push_back(
+          descriptor_write_image_info_[pixel_sampler_image_info_offset + si].sampler);
+    }
+  } else if (!texture_count_pixel && !sampler_count_pixel) {
+    last_bound_pixel_image_views_.clear();
+    last_bound_pixel_samplers_.clear();
   }
   // Write.
   if (write_descriptor_set_count) {

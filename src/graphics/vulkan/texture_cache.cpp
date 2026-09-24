@@ -441,6 +441,8 @@ VulkanTextureCache::~VulkanTextureCache() {
     dfn.vkDestroySampler(device, sampler_pair.second.sampler, nullptr);
   }
   samplers_.clear();
+  last_sampler_ = VK_NULL_HANDLE;
+  last_sampler_submission_ = UINT64_MAX;
   custom_border_color_sampler_count_ = 0;
   COUNT_profile_set("gpu/texture_cache/vulkan/samplers", 0);
   sampler_used_last_ = nullptr;
@@ -762,6 +764,12 @@ VkSampler VulkanTextureCache::UseSampler(SamplerParameters parameters, bool& has
   assert_true(command_processor_.submission_open());
   uint64_t submission_current = command_processor_.GetCurrentSubmission();
 
+  if (last_sampler_ != VK_NULL_HANDLE && last_sampler_parameters_ == parameters &&
+      last_sampler_submission_ == submission_current) {
+    has_overflown_out = false;
+    return last_sampler_;
+  }
+
   // Try to find an existing sampler.
   auto it_existing = samplers_.find(parameters);
   if (it_existing != samplers_.end()) {
@@ -784,6 +792,9 @@ VkSampler VulkanTextureCache::UseSampler(SamplerParameters parameters, bool& has
         sampler_used_last_ = &sampler;
       }
     }
+    last_sampler_parameters_ = parameters;
+    last_sampler_ = sampler.second.sampler;
+    last_sampler_submission_ = submission_current;
     has_overflown_out = false;
     return sampler.second.sampler;
   }
@@ -811,6 +822,10 @@ VkSampler VulkanTextureCache::UseSampler(SamplerParameters parameters, bool& has
       if (custom_border_color_sampler_count_) {
         --custom_border_color_sampler_count_;
       }
+    }
+    if (last_sampler_ == sampler_used_first_->second.sampler) {
+      last_sampler_ = VK_NULL_HANDLE;
+      last_sampler_submission_ = UINT64_MAX;
     }
     dfn.vkDestroySampler(device, sampler_used_first_->second.sampler, nullptr);
     if (sampler_used_first_->second.used_next) {
@@ -957,6 +972,9 @@ VkSampler VulkanTextureCache::UseSampler(SamplerParameters parameters, bool& has
     sampler_used_first_ = &new_sampler;
   }
   sampler_used_last_ = &new_sampler;
+  last_sampler_parameters_ = parameters;
+  last_sampler_ = vulkan_sampler;
+  last_sampler_submission_ = submission_current;
   return vulkan_sampler;
 }
 

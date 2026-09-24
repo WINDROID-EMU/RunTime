@@ -469,6 +469,38 @@ bool SharedMemory::RequestRanges(const std::pair<uint32_t, uint32_t>* ranges, si
 }
 
 bool SharedMemory::RequestRange(uint32_t start, uint32_t length) {
+  if (!length) {
+    return true;
+  }
+  if (start > kBufferSize || (kBufferSize - start) < length) {
+    return false;
+  }
+  if (!EnsureHostGpuMemoryAllocated(start, length)) {
+    return false;
+  }
+  uint32_t page_first = start >> page_size_log2_;
+  uint32_t page_last = (start + length - 1) >> page_size_log2_;
+  uint32_t block_first = page_first >> 6;
+  uint32_t block_last = page_last >> 6;
+
+  bool all_valid = true;
+  for (uint32_t i = block_first; i <= block_last; ++i) {
+    uint64_t expected_mask = UINT64_MAX;
+    if (i == block_first) {
+      expected_mask &= ~((uint64_t(1) << (page_first & 63)) - 1);
+    }
+    if (i == block_last && (page_last & 63) != 63) {
+      expected_mask &= (uint64_t(1) << ((page_last & 63) + 1)) - 1;
+    }
+    if ((system_page_flags_valid_[i] & expected_mask) != expected_mask) {
+      all_valid = false;
+      break;
+    }
+  }
+  if (all_valid) {
+    return true;
+  }
+
   std::pair<uint32_t, uint32_t> range(start, length);
   return RequestRanges(&range, 1);
 }

@@ -899,27 +899,14 @@ void XThread::SetActiveCpu(uint8_t cpu_index) {
   }
 
 #if REX_PLATFORM_ANDROID
-  // On Android big.LITTLE / DynamIQ SoCs (e.g. Snapdragon 870: Cores 0..3 A55 Little,
-  // Cores 4..6 A77 Big, Core 7 A77 Prime):
-  // Never let guest emulation threads run on the power-saving LITTLE cores (0..3)!
-  // Blindly doing (1 << cpu_index) pins guest CPU 0 (Main game loop) to Core 0 (A55 @ 1.8GHz).
-  // Instead, pin guest threads to the high-performance cores (Cores 4..7):
-  uint32_t num_cpus = rex::thread::logical_processor_count();
-  if (num_cpus >= 8) {
-    // Cores 4..7 (0xF0ULL):
-    // For CPU 0 (Main thread): prioritize Prime core (7) and Big core (6)
-    // For other threads (workers, audio): allow floating across Big + Prime cores (4..7)
-    uint64_t mask = 0xF0ULL;
-    if (cpu_index == 0) {
-      mask = (1ULL << 7) | (1ULL << 6);
-    }
-    thread_->set_affinity_mask(mask);
-    thread_->set_priority(rex::thread::ThreadPriority::kAboveNormal);
-  } else if (num_cpus > 4) {
-    uint64_t mask = 0;
-    for (uint32_t i = num_cpus / 2; i < num_cpus; ++i) {
-      mask |= (1ULL << i);
-    }
+  // On Android big.LITTLE / DynamIQ SoCs:
+  // Never let guest emulation threads run on the power-saving LITTLE cores!
+  // Blindly doing (1 << cpu_index) could pin guest CPU 0 (Main game loop) to a LITTLE core.
+  // Instead, pin guest threads to the high-performance cores dynamically:
+  uint64_t perf_mask = rex::thread::performance_core_mask();
+  uint64_t prime_mask = rex::thread::prime_core_mask();
+  if (perf_mask != 0) {
+    uint64_t mask = (cpu_index == 0 && prime_mask != 0) ? prime_mask : perf_mask;
     thread_->set_affinity_mask(mask);
     thread_->set_priority(rex::thread::ThreadPriority::kAboveNormal);
   }

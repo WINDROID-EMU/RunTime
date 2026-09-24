@@ -23,6 +23,8 @@ static_assert(REX_PLATFORM_ANDROID, "This file is Android/POSIX-only");
 #include <deque>
 #include <limits>
 #include <memory>
+#include <cstdio>
+#include <vector>
 
 #include <pthread.h>
 #include <semaphore.h>
@@ -806,21 +808,22 @@ class PosixCondition<Thread> : public PosixConditionBase {
 #if REX_PLATFORM_ANDROID
     // In Android Linux CFS, nice values range from -20 (highest priority) to 19 (idle).
     // Non-root applications cannot use SCHED_FIFO, but can adjust nice priority.
-    // Map rex thread priority to Linux nice value:
-    // kHighest (32)      -> -10
-    // kAboveNormal (24)  -> -5
+    // To prevent starving system_server, surfaceflinger, and launcher3 (which run at nice 0 / -2),
+    // cap thread priorities safely:
+    // kHighest (32)      -> -2 (gentle boost over normal apps without starving OS)
+    // kAboveNormal (24)  -> -1
     // kNormal (16)       -> 0
-    // kBelowNormal (8)   -> 5
-    // kLowest (1)        -> 10
+    // kBelowNormal (8)   -> 2
+    // kLowest (1)        -> 4
     int nice = 0;
     if (new_priority >= ThreadPriority::kHighest) {
-      nice = -10;
+      nice = -2;
     } else if (new_priority >= ThreadPriority::kAboveNormal) {
-      nice = -5;
+      nice = -1;
     } else if (new_priority <= ThreadPriority::kLowest) {
-      nice = 10;
+      nice = 4;
     } else if (new_priority <= ThreadPriority::kBelowNormal) {
-      nice = 5;
+      nice = 2;
     } else {
       nice = 0;
     }
@@ -1509,6 +1512,128 @@ static void signal_handler(int signal, siginfo_t* /*info*/, void* /*context*/) {
     default:
       assert_always();
   }
+}
+
+struct CpuTopology {
+  uint64_t prime_mask = 0;
+  uint64_t performance_mask = 0;
+  uint64_t efficiency_mask = 0;
+};
+
+static CpuTopology DetectCpuTopology() {
+  CpuTopology topo{};
+  uint32_t cpus = logical_processor_count();
+  if (cpus == 0) {
+    cpus = 1;
+  }
+  if (cpus > 64) {
+    cpus = 64;
+  }
+
+#if defined(__linux__) || REX_PLATFORM_ANDROID
+  std::vector<uint64_t> max_freqs(cpus, 0);
+  uint64_t highest_freq = 0;
+  bool found_any = false;
+
+  for (uint32_t i = 0; i < cpus; ++i) {
+    char path[128];
+    std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_max_freq", i);
+    FILE* f = fopen(path, "r");
+    if (f) {
+      unsigned long long freq = 0;
+      if (fscanf(f, "%llu", &freq) == 1) {
+        max_freqs[i] = static_cast<uint64_t>(freq);
+        if (max_freqs[i] > highest_freq) {
+          highest_freq = max_freqs[i];
+        }
+        found_any = true;
+      }
+      fclose(f);
+    }
+  }
+
+  // Also try reading cpu_capacity if cpufreq was not accessible
+  if (!found_any) {
+    for (uint32_t i = 0; i < cpus; ++i) {
+      char path[128];
+      std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cpu_capacity", i);
+      FILE* f = fopen(path, "r");
+      if (f) {
+        unsigned long long cap = 0;
+        if (fscanf(f, "%llu", &cap) == 1) {
+          max_freqs[i] = static_cast<uint64_t>(cap);
+          if (max_freqs[i] > highest_freq) {
+            highest_freq = max_freqs[i];
+          }
+          found_any = true;
+        }
+        fclose(f);
+      }
+    }
+  }
+
+  if (found_any && highest_freq > 0) {
+    // Identify prime cores (within 5% of highest freq)
+    uint64_t prime_threshold = highest_freq * 95 / 100;
+    // Identify big cores (within ~75% of highest freq)
+    uint64_t perf_threshold = highest_freq * 75 / 100;
+
+    for (uint32_t i = 0; i < cpus; ++i) {
+      if (max_freqs[i] >= prime_threshold) {
+        topo.prime_mask |= (1ULL << i);
+      }
+      if (max_freqs[i] >= perf_threshold) {
+        topo.performance_mask |= (1ULL << i);
+      } else {
+        topo.efficiency_mask |= (1ULL << i);
+      }
+    }
+  }
+#endif
+
+  // Fallback heuristics if sysfs could not be read or homogeneous CPU detected:
+  if (topo.performance_mask == 0) {
+    if (cpus >= 8) {
+      // Common Android 8-core layout (e.g. 4 little + 4 big/prime): cores 4..7
+      topo.performance_mask = 0xF0ULL;
+      topo.prime_mask = (1ULL << 7) | (1ULL << 6);
+      topo.efficiency_mask = 0x0FULL;
+    } else if (cpus > 4) {
+      for (uint32_t i = cpus / 2; i < cpus; ++i) {
+        topo.performance_mask |= (1ULL << i);
+      }
+      topo.prime_mask = (1ULL << (cpus - 1));
+      topo.efficiency_mask = ((1ULL << (cpus / 2)) - 1);
+    } else {
+      // 4 cores or fewer: use all cores
+      uint64_t all_mask = (cpus == 64) ? ~0ULL : ((1ULL << cpus) - 1);
+      topo.performance_mask = all_mask;
+      topo.prime_mask = all_mask;
+      topo.efficiency_mask = 0;
+    }
+  }
+
+  if (topo.prime_mask == 0) {
+    topo.prime_mask = topo.performance_mask;
+  }
+
+  REXLOG_INFO("CPU Topology detected: performance_mask=0x{:X}, prime_mask=0x{:X}, efficiency_mask=0x{:X}",
+              topo.performance_mask, topo.prime_mask, topo.efficiency_mask);
+
+  return topo;
+}
+
+static const CpuTopology& GetCpuTopology() {
+  static CpuTopology topology = DetectCpuTopology();
+  return topology;
+}
+
+uint64_t performance_core_mask() {
+  return GetCpuTopology().performance_mask;
+}
+
+uint64_t prime_core_mask() {
+  return GetCpuTopology().prime_mask;
 }
 
 }  // namespace rex::thread

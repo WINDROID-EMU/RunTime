@@ -34,6 +34,7 @@
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
+#include <rex/thread.h>
 
 REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
 
@@ -49,7 +50,7 @@ REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 #endif
 
-REXCVAR_DEFINE_BOOL(occlusion_query_enable, true, "GPU", "Enable host occlusion query handling")
+REXCVAR_DEFINE_BOOL(occlusion_query_enable, false, "GPU", "Enable host occlusion query handling")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(readback_resolve, "none", "GPU",
@@ -150,6 +151,15 @@ bool CommandProcessor::Initialize() {
       }));
   worker_thread_->set_name("GPU Commands");
   worker_thread_->Create();
+#if REX_PLATFORM_ANDROID
+  if (worker_thread_->thread()) {
+    uint64_t gpu_affinity = rex::thread::performance_core_mask();
+    if (gpu_affinity != 0) {
+      worker_thread_->thread()->set_affinity_mask(gpu_affinity);
+    }
+    worker_thread_->thread()->set_priority(rex::thread::ThreadPriority::kAboveNormal);
+  }
+#endif
 
   return true;
 }

@@ -23,6 +23,10 @@
 #include <rex/system/function_dispatcher.h>
 #include <rex/system/thread_state.h>
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 namespace rex::runtime {
 
 namespace {
@@ -35,8 +39,13 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
 }  // namespace
 
 static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
-  REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
-            ctx.last_indirect_target);
+#if defined(__ANDROID__)
+  __android_log_print(ANDROID_LOG_WARN, "REX_PPC",
+                      "Call to invalid or unregistered function at guest address 0x%08X (r3=%08X, lr=%08X)",
+                      ctx.last_indirect_target, uint32_t(ctx.r3.u32), uint32_t(ctx.lr));
+#endif
+  REXSYS_WARN("Call to invalid or unregistered function at guest address 0x{:08X}",
+              ctx.last_indirect_target);
 }
 
 PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {

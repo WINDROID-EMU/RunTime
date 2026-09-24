@@ -1422,18 +1422,6 @@ bool VulkanRenderTargetCache::Update(bool is_rasterization_done,
             depth_and_color_render_targets[4]->key().GetColorFormat();
       }
 
-      // Otimização Adreno GMEM / TBDR:
-      // Se a escrita de profundidade e stencil estiver desativada neste draw/pass,
-      // marcar depth_store_dont_care = 1 para evitar flush do buffer da GMEM para a RAM.
-      if (!normalized_depth_control.z_write_enable && !normalized_depth_control.stencil_enable) {
-        render_pass_key.depth_store_dont_care = 1;
-      }
-      // Se a máscara de escrita de cor for 0 (ex: passes intermediários de profundidade / shadow maps),
-      // nenhum dado de cor é modificado, dispensando o STORE de cor para a RAM.
-      if (!normalized_color_mask) {
-        render_pass_key.color_store_dont_care = 1;
-      }
-
       const Framebuffer* framebuffer = last_update_framebuffer_;
       VkRenderPass render_pass = last_update_render_pass_key_ == render_pass_key
                                      ? last_update_render_pass_
@@ -1615,12 +1603,9 @@ VkRenderPass VulkanRenderTargetCache::GetHostRenderTargetsRenderPass(RenderPassK
     attachment.format = GetDepthVulkanFormat(key.depth_format);
     attachment.samples = samples;
     attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    // Otimização Adreno / TBDR: descartar escrita de profundidade quando inalterada
-    attachment.storeOp = key.depth_store_dont_care ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                                   : VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    attachment.stencilStoreOp = key.depth_store_dont_care ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                                          : VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachment.initialLayout = VulkanRenderTarget::kDepthDrawLayout;
     attachment.finalLayout = VulkanRenderTarget::kDepthDrawLayout;
   }
@@ -1649,9 +1634,7 @@ VkRenderPass VulkanRenderTargetCache::GetHostRenderTargetsRenderPass(RenderPassK
                             : GetColorVulkanFormat(color_format);
     attachment.samples = samples;
     attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    // Otimização Adreno / TBDR: descartar escrita de cor se a máscara for 0 (ex: shadow maps)
-    attachment.storeOp = key.color_store_dont_care ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                                   : VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachment.initialLayout = VulkanRenderTarget::kColorDrawLayout;

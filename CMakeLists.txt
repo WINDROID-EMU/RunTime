@@ -15,6 +15,7 @@ option(REXGLUE_ENABLE_SANITIZERS "Enable UndefinedBehaviorSanitizer" OFF)
 option(REXGLUE_ENABLE_FIDELITYFX "Enable optional AMD FidelityFX integration (experimental)" OFF)
 option(REXGLUE_ENABLE_TRACY      "Enable Tracy profiler integration" OFF)
 option(REXGLUE_ENABLE_PERF_COUNTERS "Enable lightweight perf counter registry and overlay" ON)
+option(REXGLUE_ENABLE_LTO         "Enable ThinLTO for Release builds" ON)
 
 if(REXGLUE_ENABLE_TRACY)
     add_compile_definitions($<$<NOT:$<CONFIG:Release>>:REXGLUE_ENABLE_PROFILING>)
@@ -65,9 +66,17 @@ add_compile_options(
     -fno-char8_t
 )
 
+if(REXGLUE_ENABLE_LTO)
+    add_compile_options($<$<CONFIG:RELEASE>:-flto=thin>)
+    add_link_options($<$<CONFIG:RELEASE>:-flto=thin>)
+endif()
+
 # Global link options
 add_link_options(
     $<$<CONFIG:RELEASE>:-Wl,--gc-sections>
+    $<$<CONFIG:RELEASE>:-Wl,--icf=all>
+    $<$<CONFIG:RELEASE>:-Wl,-O3>
+    $<$<CONFIG:RELEASE>:-Wl,--as-needed>
 )
 
 # Platform and Architecture: Android ARM64
