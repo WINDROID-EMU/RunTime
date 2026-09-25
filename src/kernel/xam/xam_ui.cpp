@@ -294,6 +294,16 @@ u32 XamShowMessageBoxUI_entry(u32 user_index, mapped_wstring title_ptr, mapped_w
   }
 
   X_RESULT result;
+#if REX_PLATFORM_ANDROID
+  // On Android, always auto-select the active button immediately to avoid blocking on ImGui dialogs
+  auto run = [result_ptr, active_button]() -> X_RESULT {
+    if (result_ptr) {
+      *result_ptr = static_cast<uint32_t>(active_button);
+    }
+    return X_ERROR_SUCCESS;
+  };
+  result = xeXamDispatchHeadless(run, overlapped.guest_address());
+#else
   if (REXCVAR_GET(headless)) {
     // Auto-pick the focused button.
     auto run = [result_ptr, active_button]() -> X_RESULT {
@@ -336,6 +346,7 @@ u32 XamShowMessageBoxUI_entry(u32 user_index, mapped_wstring title_ptr, mapped_w
       result = xeXamDispatchHeadless(run, overlapped.guest_address());
     }
   }
+#endif
   return result;
 }
 
@@ -434,6 +445,19 @@ u32 XamShowKeyboardUI_entry(u32 user_index, u32 flags, mapped_wstring default_te
   auto buffer_size = static_cast<size_t>(buffer_length) * 2;
 
   X_RESULT result;
+#if REX_PLATFORM_ANDROID
+  // On Android, auto-fill default_text or "Player" and return immediately
+  auto run = [default_text, buffer, buffer_length, buffer_size]() -> X_RESULT {
+    if (!default_text || default_text.value().empty()) {
+      std::u16string def_u16 = u"Player";
+      rex::string::copy_and_swap_truncating(buffer, def_u16, buffer_length);
+    } else {
+      rex::string::copy_and_swap_truncating(buffer, default_text.value(), buffer_length);
+    }
+    return X_ERROR_SUCCESS;
+  };
+  result = xeXamDispatchHeadless(run, overlapped.guest_address());
+#else
   if (REXCVAR_GET(headless)) {
     auto run = [default_text, buffer, buffer_length, buffer_size]() -> X_RESULT {
       // Redirect default_text back into the buffer.
@@ -497,6 +521,7 @@ u32 XamShowKeyboardUI_entry(u32 user_index, u32 flags, mapped_wstring default_te
       result = xeXamDispatchHeadless(run, overlapped.guest_address());
     }
   }
+#endif
   return result;
 }
 

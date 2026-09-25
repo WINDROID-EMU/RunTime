@@ -263,8 +263,10 @@ uint32_t ReXHeap::AllocLocked(uint32_t size, bool zero) {
     }
   }
 
+  // alloc_size já inclui um kHeaderSize (definido acima como size + kHeaderSize);
+  // não somar de novo aqui.
   const uint32_t min_required_segment =
-      rex::align<uint32_t>(alloc_size + kHeaderSize, O1HEAP_ALIGNMENT);
+      rex::align<uint32_t>(alloc_size, O1HEAP_ALIGNMENT);
   const uint32_t growth_segment_size =
       std::max({initial_segment_size_, kDefaultGrowthSegmentSize, min_required_segment});
   if (!AllocateSegmentLocked(growth_segment_size)) {
