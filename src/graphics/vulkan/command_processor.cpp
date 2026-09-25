@@ -3242,10 +3242,36 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
 
   bool stencil_enable = render_target_cache_->last_update_stencil_enable();
   if (use_dynamic_rendering) {
-    if (in_render_pass_ && current_framebuffer_ == framebuffer &&
-        current_render_pass_ == VK_NULL_HANDLE &&
-        current_stencil_enable_ == stencil_enable) {
-      return;
+    if (in_render_pass_ && current_render_pass_ == VK_NULL_HANDLE) {
+      VkRenderingAttachmentInfo color_attachments[xenos::kMaxColorRenderTargets];
+      VkRenderingAttachmentInfo depth_attachment;
+      VkRenderingAttachmentInfo stencil_attachment;
+      uint32_t color_attachment_count = 0;
+      render_target_cache_->GetLastUpdateRenderingAttachments(
+          color_attachments, &color_attachment_count, &depth_attachment, &stencil_attachment);
+      bool has_depth = depth_attachment.sType == VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+      bool has_stencil = stencil_attachment.sType == VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+      VkImageView depth_view = has_depth ? depth_attachment.imageView : VK_NULL_HANDLE;
+      VkImageView stencil_view = has_stencil ? stencil_attachment.imageView : VK_NULL_HANDLE;
+
+      bool same_attachments = (current_dynamic_extent_.width == framebuffer->host_extent.width &&
+                               current_dynamic_extent_.height == framebuffer->host_extent.height &&
+                               current_dynamic_depth_view_ == depth_view &&
+                               current_dynamic_stencil_view_ == stencil_view &&
+                               current_dynamic_color_count_ == color_attachment_count);
+      if (same_attachments) {
+        for (uint32_t i = 0; i < color_attachment_count; ++i) {
+          if (current_dynamic_color_views_[i] != color_attachments[i].imageView) {
+            same_attachments = false;
+            break;
+          }
+        }
+      }
+      if (same_attachments) {
+        current_framebuffer_ = framebuffer;
+        current_stencil_enable_ = stencil_enable;
+        return;
+      }
     }
   } else {
     if (in_render_pass_ && current_render_pass_ == render_pass && current_framebuffer_ == framebuffer) {
@@ -3297,6 +3323,17 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
     rendering_info.pDepthAttachment = has_depth ? &depth_attachment : nullptr;
     rendering_info.pStencilAttachment = has_stencil ? &stencil_attachment : nullptr;
     deferred_command_buffer_.CmdVkBeginRendering(&rendering_info);
+
+    current_dynamic_depth_view_ = has_depth ? depth_attachment.imageView : VK_NULL_HANDLE;
+    current_dynamic_stencil_view_ = has_stencil ? stencil_attachment.imageView : VK_NULL_HANDLE;
+    current_dynamic_color_count_ = color_attachment_count;
+    for (uint32_t i = 0; i < color_attachment_count; ++i) {
+      current_dynamic_color_views_[i] = color_attachments[i].imageView;
+    }
+    for (uint32_t i = color_attachment_count; i < xenos::kMaxColorRenderTargets; ++i) {
+      current_dynamic_color_views_[i] = VK_NULL_HANDLE;
+    }
+    current_dynamic_extent_ = framebuffer->host_extent;
   } else {
     VkRenderPassBeginInfo render_pass_begin_info;
     render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -3395,6 +3432,15 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
     rendering_info.pDepthAttachment = transfer_dest_is_depth ? &depth_attachment : nullptr;
     rendering_info.pStencilAttachment = transfer_dest_is_depth ? &stencil_attachment : nullptr;
     deferred_command_buffer_.CmdVkBeginRendering(&rendering_info);
+
+    current_dynamic_depth_view_ = transfer_dest_is_depth ? transfer_dest_view : VK_NULL_HANDLE;
+    current_dynamic_stencil_view_ = VK_NULL_HANDLE;
+    current_dynamic_color_count_ = transfer_dest_is_depth ? 0 : 1;
+    current_dynamic_color_views_[0] = transfer_dest_is_depth ? VK_NULL_HANDLE : transfer_dest_view;
+    for (uint32_t i = 1; i < xenos::kMaxColorRenderTargets; ++i) {
+      current_dynamic_color_views_[i] = VK_NULL_HANDLE;
+    }
+    current_dynamic_extent_ = framebuffer->host_extent;
   } else {
     VkRenderPassBeginInfo render_pass_begin_info;
     render_pass_begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -3427,6 +3473,13 @@ void VulkanCommandProcessor::EndRenderPass() {
   current_framebuffer_ = nullptr;
   in_render_pass_ = false;
   current_stencil_enable_ = false;
+  current_dynamic_depth_view_ = VK_NULL_HANDLE;
+  current_dynamic_stencil_view_ = VK_NULL_HANDLE;
+  current_dynamic_color_count_ = 0;
+  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+    current_dynamic_color_views_[i] = VK_NULL_HANDLE;
+  }
+  current_dynamic_extent_ = {};
 }
 
 VkDescriptorSet VulkanCommandProcessor::AllocateSingleTransientDescriptor(
@@ -5383,6 +5436,13 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
     current_render_pass_ = VK_NULL_HANDLE;
     current_framebuffer_ = nullptr;
     in_render_pass_ = false;
+    current_dynamic_depth_view_ = VK_NULL_HANDLE;
+    current_dynamic_stencil_view_ = VK_NULL_HANDLE;
+    current_dynamic_color_count_ = 0;
+    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+      current_dynamic_color_views_[i] = VK_NULL_HANDLE;
+    }
+    current_dynamic_extent_ = {};
     current_guest_graphics_pipeline_ = VK_NULL_HANDLE;
     current_external_graphics_pipeline_ = VK_NULL_HANDLE;
     current_external_compute_pipeline_ = VK_NULL_HANDLE;

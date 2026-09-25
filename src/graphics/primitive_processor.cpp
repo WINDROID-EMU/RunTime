@@ -47,9 +47,15 @@ REXCVAR_DEFINE_BOOL(force_convert_triangle_fans_to_lists, false, "GPU",
                     "Force convert triangle fans to lists");
 #endif
 
-REXCVAR_DEFINE_INT32(primitive_processor_cache_min_indices, 0, "GPU",
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_INT32(primitive_processor_cache_min_indices, -1, "GPU",
+                     "Minimum indices for primitive processor cache (negative disables)")
+    .range(-1, 1000000);
+#else
+REXCVAR_DEFINE_INT32(primitive_processor_cache_min_indices, 64, "GPU",
                      "Minimum indices for primitive processor cache")
-    .range(0, 1000000);
+    .range(-1, 1000000);
+#endif
 
 // All these overrides are always safe to use as all backends are expected to
 // support triangle lists and line strips.
