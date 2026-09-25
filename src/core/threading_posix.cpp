@@ -808,22 +808,21 @@ class PosixCondition<Thread> : public PosixConditionBase {
 #if REX_PLATFORM_ANDROID
     // In Android Linux CFS, nice values range from -20 (highest priority) to 19 (idle).
     // Non-root applications cannot use SCHED_FIFO, but can adjust nice priority.
-    // To prevent starving system_server, surfaceflinger, and launcher3 (which run at nice 0 / -2),
-    // cap thread priorities safely:
-    // kHighest (32)      -> -2 (gentle boost over normal apps without starving OS)
-    // kAboveNormal (24)  -> -1
+    // Map thread priority levels to Android standard nice ranges:
+    // kHighest (32)      -> -8 (THREAD_PRIORITY_URGENT_DISPLAY / ensures big-core scheduling)
+    // kAboveNormal (24)  -> -4 (THREAD_PRIORITY_DISPLAY)
     // kNormal (16)       -> 0
-    // kBelowNormal (8)   -> 2
-    // kLowest (1)        -> 4
+    // kBelowNormal (8)   -> 4
+    // kLowest (1)        -> 8
     int nice = 0;
     if (new_priority >= ThreadPriority::kHighest) {
-      nice = -2;
+      nice = -8;
     } else if (new_priority >= ThreadPriority::kAboveNormal) {
-      nice = -1;
+      nice = -4;
     } else if (new_priority <= ThreadPriority::kLowest) {
-      nice = 4;
+      nice = 8;
     } else if (new_priority <= ThreadPriority::kBelowNormal) {
-      nice = 2;
+      nice = 4;
     } else {
       nice = 0;
     }

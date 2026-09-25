@@ -3364,9 +3364,20 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
       REXCVAR_GET(vulkan_dynamic_rendering) && vulkan_device->properties().dynamicRendering;
 
   if (use_dynamic_rendering) {
-    if (in_render_pass_ && current_framebuffer_ == framebuffer &&
-        current_render_pass_ == VK_NULL_HANDLE) {
-      return;
+    if (in_render_pass_ && current_render_pass_ == VK_NULL_HANDLE) {
+      bool is_same =
+          (current_dynamic_extent_.width == framebuffer->host_extent.width &&
+           current_dynamic_extent_.height == framebuffer->host_extent.height &&
+           (transfer_dest_is_depth
+                ? (current_dynamic_depth_view_ == transfer_dest_view &&
+                   current_dynamic_color_count_ == 0)
+                : (current_dynamic_color_count_ == 1 &&
+                   current_dynamic_color_views_[0] == transfer_dest_view &&
+                   current_dynamic_depth_view_ == VK_NULL_HANDLE)));
+      if (is_same) {
+        current_framebuffer_ = framebuffer;
+        return;
+      }
     }
   } else {
     if (current_render_pass_ == render_pass && current_framebuffer_ == framebuffer) {
