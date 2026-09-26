@@ -494,7 +494,12 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
     }
   }
 
-  auto hw_cache_path = shader_storage_root / fmt::format("{:08X}.vk_pipeline_cache.bin", title_id);
+  // NFSMW Recomp: Override pipeline cache path to use the global pre-compiled resources.
+  auto resources_root = cache_root / ".." / "resources";
+  if (!std::filesystem::exists(resources_root)) {
+    std::filesystem::create_directories(resources_root);
+  }
+  auto hw_cache_path = resources_root / "nfsmw_vulkan_pipelines.bin";
   LoadHardwarePipelineCache(hw_cache_path);
 
   bool edram_fragment_shader_interlock =

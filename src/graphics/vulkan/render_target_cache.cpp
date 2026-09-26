@@ -1128,6 +1128,20 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
   written_address_out = 0;
   written_length_out = 0;
 
+  // ==========================================
+  // NFSMW Recomp: eDRAM Resolve Bypass
+  // ==========================================
+  // Bypasses the heavily unoptimized eDRAM to System Memory Resolve.
+  // This forwards the base address downstream as if it resolved instantly.
+  // The Texture cache or presentation will be modified to source from this frame's 
+  // FBO directly instead of the guest memory copy.
+  if (GetPath() == Path::kHostRenderTargets && REXCVAR_GET(direct_host_resolve)) {
+      written_address_out = register_file().values[xenos::xe_gpu_reg::RB_COPY_DEST_BASE].u32 & 0x1FFFFFFF;
+      written_length_out = 1; // Fake length to signal success downstream
+      return true;
+  }
+  // ==========================================
+
   bool draw_resolution_scaled = IsDrawResolutionScaled();
 
   draw_util::ResolveInfo resolve_info;
