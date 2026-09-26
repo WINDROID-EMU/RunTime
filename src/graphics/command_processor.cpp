@@ -13,6 +13,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <string_view>
 
 #include <fmt/format.h>
@@ -88,6 +89,15 @@ REXCVAR_DEFINE_BOOL(async_shader_compilation, true, "GPU",
                     "pipelines are being prepared.")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_BOOL(pm4_trace, false, "GPU",
+                    "Write structured PM4 packet/state trace JSONL for graphics reverse engineering")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_STRING(pm4_trace_path, "pm4_trace.jsonl", "GPU",
+                      "Output path for the PM4 JSONL trace");
+REXCVAR_DEFINE_BOOL(pm4_plume_transpile, false, "GPU",
+                    "Classify PM4 packets into the experimental Plume IR; legacy backend remains authoritative")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 namespace rex::graphics {
 
 using namespace rex::graphics::xenos;
@@ -124,6 +134,17 @@ CommandProcessor::CommandProcessor(GraphicsSystem* graphics_system,
 CommandProcessor::~CommandProcessor() = default;
 
 bool CommandProcessor::Initialize() {
+  pm4_plume_transpiler_.SetEnabled(REXCVAR_GET(pm4_plume_transpile));
+  if (REXCVAR_GET(pm4_trace)) {
+    pm4_trace_file_ = std::make_unique<std::ofstream>(REXCVAR_GET(pm4_trace_path),
+                                                      std::ios::out | std::ios::app);
+    if (!pm4_trace_file_->is_open()) {
+      REXGPU_WARN("Unable to open PM4 trace path '{}'", REXCVAR_GET(pm4_trace_path));
+      pm4_trace_file_.reset();
+    } else {
+      REXGPU_INFO("PM4 trace enabled: {}", REXCVAR_GET(pm4_trace_path));
+    }
+  }
   // Initialize the gamma ramps to their default (linear) values - taken from
   // what games set when starting with the sRGB (return value 1)
   // VdGetCurrentDisplayGamma.
@@ -358,6 +379,7 @@ uint32_t CommandProcessor::ReadRegisterValue(uint32_t index) const {
 }
 
 void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+  pm4_plume_transpiler_.ObserveRegisterWrite(index, value);
   RegisterFile& regs = *register_file_;
   if (index >= RegisterFile::kRegisterCount) {
     auto [it, inserted] = extended_register_values_.insert_or_assign(index, value);
@@ -750,6 +772,7 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
   // Type-3 packet.
   uint32_t opcode = (packet >> 8) & 0x7F;
   uint32_t count = ((packet >> 16) & 0x3FFF) + 1;
+  pm4_plume_transpiler_.ObservePacket(opcode, count);
   auto data_start_offset = reader->read_offset();
 
   if (reader->read_count() < count * sizeof(uint32_t)) {
@@ -765,6 +788,7 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
     bool any_pass = (bin_select_ & bin_mask_) != 0;
     if (!any_pass || opcode == PM4_XE_SWAP) {
       reader->AdvanceRead(count * sizeof(uint32_t));
+      TracePacket(opcode, packet, count, data_start_offset, true);
       return true;
     }
   }
@@ -905,7 +929,29 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
 
   assert_true(reader->read_offset() ==
               (data_start_offset + (count * sizeof(uint32_t))) % reader->capacity());
+  TracePacket(opcode, packet, count, data_start_offset, result);
   return result;
+}
+
+void CommandProcessor::TracePacket(uint32_t opcode, uint32_t packet, uint32_t count,
+                                   uint32_t data_offset, bool result) {
+  if (!pm4_trace_file_) {
+    return;
+  }
+  const auto kind = pm4_plume_transpiler_.last_packet_kind();
+  *pm4_trace_file_ << "{\"seq\":" << pm4_trace_sequence_++
+                   << ",\"frame\":" << pm4_trace_frame_
+                   << ",\"primary_ptr\":" << primary_buffer_ptr_
+                   << ",\"offset\":" << data_offset
+                   << ",\"packet\":" << packet
+                   << ",\"opcode\":" << opcode
+                   << ",\"count\":" << count
+                   << ",\"kind\":" << static_cast<uint32_t>(kind)
+                   << ",\"ok\":" << (result ? "true" : "false") << "}\n";
+  pm4_trace_file_->flush();
+  if (opcode == PM4_XE_SWAP) {
+    ++pm4_trace_frame_;
+  }
 }
 
 bool CommandProcessor::ExecutePacketType3_ME_INIT(memory::RingBuffer* reader, uint32_t packet,
@@ -1395,6 +1441,9 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
 
       bool major_mode_explicit =
           xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type);
+      pm4_plume_transpiler_.ObserveDraw(opcode_name,
+                                        static_cast<uint32_t>(vgt_draw_initiator.prim_type),
+                                        vgt_draw_initiator.num_indices, is_indexed);
       draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
                                  is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);
       if (!draw_succeeded) {
@@ -1543,6 +1592,7 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD(memory::RingBuffer* reader, ui
 
   auto shader =
       LoadShader(shader_type, addr, memory_->TranslatePhysical<uint32_t*>(addr), size_dwords);
+  pm4_plume_transpiler_.ObserveShaderLoad(static_cast<uint32_t>(shader_type), addr, size_dwords);
   switch (shader_type) {
     case xenos::ShaderType::kVertex:
       active_vertex_shader_ = shader;
@@ -1573,6 +1623,8 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD_IMMEDIATE(memory::RingBuffer* 
   assert_true(count - 2 >= size_dwords);
   auto shader = LoadShader(shader_type, uint32_t(reader->read_ptr()),
                            reinterpret_cast<uint32_t*>(reader->read_ptr()), size_dwords);
+  pm4_plume_transpiler_.ObserveShaderLoad(static_cast<uint32_t>(shader_type),
+                                           uint32_t(reader->read_ptr()), size_dwords);
   switch (shader_type) {
     case xenos::ShaderType::kVertex:
       active_vertex_shader_ = shader;
