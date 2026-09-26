@@ -1136,7 +1136,7 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
   // The Texture cache or presentation will be modified to source from this frame's 
   // FBO directly instead of the guest memory copy.
   if (GetPath() == Path::kHostRenderTargets && REXCVAR_GET(direct_host_resolve)) {
-      written_address_out = register_file().values[xenos::xe_gpu_reg::RB_COPY_DEST_BASE].u32 & 0x1FFFFFFF;
+      written_address_out = register_file()[XE_GPU_REG_RB_COPY_DEST_BASE] & 0x1FFFFFFF;
       written_length_out = 1; // Fake length to signal success downstream
       return true;
   }
