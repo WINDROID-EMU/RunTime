@@ -31,6 +31,7 @@ set(REXGPU_PLUME_SOURCES
     ${REXGLUE_ROOT}/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
     ${REXGLUE_ROOT}/src/graphics/pipeline/shader/spirv_translator_memexport.cpp
     ${REXGLUE_ROOT}/src/graphics/pipeline/shader/spirv_translator_rb.cpp
+    ${REXGLUE_ROOT}/src/graphics/pipeline/shader/prebaked_shader_cache.cpp
     ${REXGLUE_ROOT}/src/graphics/util/draw_extent_estimator.cpp
     ${REXGLUE_ROOT}/src/graphics/util/draw.cpp
     ${REXGLUE_ROOT}/src/graphics/flags.cpp

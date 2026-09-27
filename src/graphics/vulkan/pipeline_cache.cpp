@@ -391,6 +391,41 @@ bool VulkanPipelineCache::Initialize() {
     }
   }
 
+  // Early check and preload AOT prebaked SPIR-V cache & native VkPipelineCache
+  const std::vector<std::string> early_spv_candidates = {
+      "/storage/emulated/0/Android/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_prebaked.spvcache",
+      "/data/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_prebaked.spvcache",
+      "/data/local/tmp/nfsmw_bench/454107D9_prebaked.spvcache",
+      "shaders/shareable/454107D9_prebaked.spvcache",
+      "454107D9_prebaked.spvcache",
+  };
+  for (const auto& spv_path : early_spv_candidates) {
+    if (std::filesystem::exists(spv_path)) {
+      if (rex::graphics::PrebakedShaderCache::Get().LoadFromFile(spv_path)) {
+        REXGPU_INFO("VulkanPipelineCache: Early loaded prebaked AOT SPIR-V cache from {} ({} shaders)",
+                    spv_path, rex::graphics::PrebakedShaderCache::Get().Count());
+        break;
+      }
+    }
+  }
+
+  const std::vector<std::string> early_hw_candidates = {
+      "/storage/emulated/0/Android/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_hw.vkcache",
+      "/data/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_hw.vkcache",
+      "/data/local/tmp/nfsmw_bench/454107D9_hw.vkcache",
+      "shaders/shareable/454107D9_hw.vkcache",
+      "454107D9_hw.vkcache",
+  };
+  for (const auto& hw_path : early_hw_candidates) {
+    if (std::filesystem::exists(hw_path)) {
+      LoadHardwarePipelineCache(hw_path);
+      if (hardware_pipeline_cache_ != VK_NULL_HANDLE) {
+        REXGPU_INFO("VulkanPipelineCache: Early loaded hardware pipeline cache from {}", hw_path);
+        break;
+      }
+    }
+  }
+
   return true;
 }
 
@@ -439,9 +474,8 @@ void VulkanPipelineCache::LoadHardwarePipelineCache(const std::filesystem::path&
   }
 }
 
-void VulkanPipelineCache::SaveAndDestroyHardwarePipelineCache() {
-  if (hardware_pipeline_cache_ == VK_NULL_HANDLE) {
-    hardware_pipeline_cache_file_path_.clear();
+void VulkanPipelineCache::SaveHardwarePipelineCache() {
+  if (hardware_pipeline_cache_ == VK_NULL_HANDLE || hardware_pipeline_cache_file_path_.empty()) {
     return;
   }
 
@@ -449,25 +483,36 @@ void VulkanPipelineCache::SaveAndDestroyHardwarePipelineCache() {
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
   const VkDevice device = vulkan_device->device();
 
-  if (!hardware_pipeline_cache_file_path_.empty()) {
-    size_t data_size = 0;
-    VkResult result =
-        dfn.vkGetPipelineCacheData(device, hardware_pipeline_cache_, &data_size, nullptr);
-    if (result == VK_SUCCESS && data_size > 0) {
-      std::vector<uint8_t> cache_data(data_size);
-      result =
-          dfn.vkGetPipelineCacheData(device, hardware_pipeline_cache_, &data_size, cache_data.data());
-      if (result == VK_SUCCESS) {
-        FILE* file = rex::filesystem::OpenFile(hardware_pipeline_cache_file_path_, "wb");
-        if (file) {
-          fwrite(cache_data.data(), 1, data_size, file);
-          fclose(file);
-          REXGPU_INFO("VulkanPipelineCache: Saved native hardware VkPipelineCache ({} bytes) to {}",
-                      data_size, rex::path_to_utf8(hardware_pipeline_cache_file_path_));
-        }
+  size_t data_size = 0;
+  VkResult result =
+      dfn.vkGetPipelineCacheData(device, hardware_pipeline_cache_, &data_size, nullptr);
+  if (result == VK_SUCCESS && data_size > 0) {
+    std::vector<uint8_t> cache_data(data_size);
+    result =
+        dfn.vkGetPipelineCacheData(device, hardware_pipeline_cache_, &data_size, cache_data.data());
+    if (result == VK_SUCCESS) {
+      FILE* file = rex::filesystem::OpenFile(hardware_pipeline_cache_file_path_, "wb");
+      if (file) {
+        fwrite(cache_data.data(), 1, data_size, file);
+        fclose(file);
+        REXGPU_INFO("VulkanPipelineCache: Saved native hardware VkPipelineCache ({} bytes) to {}",
+                    data_size, rex::path_to_utf8(hardware_pipeline_cache_file_path_));
       }
     }
   }
+}
+
+void VulkanPipelineCache::SaveAndDestroyHardwarePipelineCache() {
+  if (hardware_pipeline_cache_ == VK_NULL_HANDLE) {
+    hardware_pipeline_cache_file_path_.clear();
+    return;
+  }
+
+  SaveHardwarePipelineCache();
+
+  const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
+  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
+  const VkDevice device = vulkan_device->device();
 
   dfn.vkDestroyPipelineCache(device, hardware_pipeline_cache_, nullptr);
   hardware_pipeline_cache_ = VK_NULL_HANDLE;
@@ -494,13 +539,61 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
     }
   }
 
-  // NFSMW Recomp: Override pipeline cache path to use the global pre-compiled resources.
-  auto resources_root = cache_root / ".." / "resources";
-  if (!std::filesystem::exists(resources_root)) {
-    std::filesystem::create_directories(resources_root);
+  // Load prebaked AOT SPIR-V shader cache if not already loaded
+  if (rex::graphics::PrebakedShaderCache::Get().Count() == 0) {
+    const std::vector<std::filesystem::path> spv_cache_candidates = {
+        shader_storage_shareable_root / fmt::format("{:08X}_prebaked.spvcache", title_id),
+        shader_storage_root / fmt::format("{:08X}_prebaked.spvcache", title_id),
+        cache_root / ".." / "resources" / "454107D9_prebaked.spvcache",
+        cache_root / ".." / "resources" / "nfsmw_prebaked.spvcache",
+        std::filesystem::path("/storage/emulated/0/Android/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_prebaked.spvcache"),
+        std::filesystem::path("/data/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_prebaked.spvcache"),
+        std::filesystem::path("/data/local/tmp/nfsmw_bench/454107D9_prebaked.spvcache"),
+        std::filesystem::path("shaders/shareable/454107D9_prebaked.spvcache"),
+        std::filesystem::path("454107D9_prebaked.spvcache"),
+    };
+    for (const auto& spv_path : spv_cache_candidates) {
+      if (std::filesystem::exists(spv_path)) {
+        if (rex::graphics::PrebakedShaderCache::Get().LoadFromFile(rex::path_to_utf8(spv_path))) {
+          REXGPU_INFO("VulkanPipelineCache: Loaded prebaked AOT SPIR-V cache from {} ({} shaders)",
+                      rex::path_to_utf8(spv_path), rex::graphics::PrebakedShaderCache::Get().Count());
+          break;
+        }
+      }
+    }
   }
-  auto hw_cache_path = resources_root / "nfsmw_vulkan_pipelines.bin";
-  LoadHardwarePipelineCache(hw_cache_path);
+
+  // Load native VkPipelineCache from disk/assets if not already loaded
+  if (hardware_pipeline_cache_ == VK_NULL_HANDLE) {
+    const std::vector<std::filesystem::path> hw_cache_candidates = {
+        shader_storage_shareable_root / fmt::format("{:08X}_hw.vkcache", title_id),
+        shader_storage_shareable_root / fmt::format("{:08X}.vk_pipeline_cache.bin", title_id),
+        shader_storage_root / fmt::format("{:08X}_hw.vkcache", title_id),
+        shader_storage_root / fmt::format("{:08X}.vk_pipeline_cache.bin", title_id),
+        cache_root / ".." / "resources" / "nfsmw_vulkan_pipelines.bin",
+        cache_root / ".." / "resources" / "454107D9_hw.vkcache",
+        std::filesystem::path("/storage/emulated/0/Android/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_hw.vkcache"),
+        std::filesystem::path("/data/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_hw.vkcache"),
+        std::filesystem::path("/data/local/tmp/nfsmw_bench/454107D9_hw.vkcache"),
+    };
+    bool hw_cache_loaded = false;
+    for (const auto& hw_path : hw_cache_candidates) {
+      if (std::filesystem::exists(hw_path)) {
+        LoadHardwarePipelineCache(hw_path);
+        if (hardware_pipeline_cache_ != VK_NULL_HANDLE) {
+          hw_cache_loaded = true;
+          REXGPU_INFO("VulkanPipelineCache: Loaded hardware pipeline cache from {}", rex::path_to_utf8(hw_path));
+          break;
+        }
+      }
+    }
+    if (!hw_cache_loaded) {
+      auto default_hw_path = shader_storage_shareable_root / fmt::format("{:08X}_hw.vkcache", title_id);
+      LoadHardwarePipelineCache(default_hw_path);
+    }
+  } else if (hardware_pipeline_cache_file_path_.empty()) {
+    hardware_pipeline_cache_file_path_ = shader_storage_shareable_root / fmt::format("{:08X}_hw.vkcache", title_id);
+  }
 
   bool edram_fragment_shader_interlock =
       render_target_cache_.GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
@@ -833,7 +926,7 @@ void VulkanPipelineCache::ShutdownShaderStorage() {
     shader_storage_file_flush_needed_ = false;
   }
 
-  SaveAndDestroyHardwarePipelineCache();
+  SaveHardwarePipelineCache();
 
   shader_storage_cache_root_.clear();
   shader_storage_title_id_ = 0;
@@ -913,6 +1006,7 @@ void VulkanPipelineCache::Shutdown() {
   creation_completion_event_.reset();
 
   ShutdownShaderStorage();
+  SaveAndDestroyHardwarePipelineCache();
 
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
@@ -1332,11 +1426,18 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
                                                   VulkanShader::VulkanTranslation& translation) {
   VulkanShader& shader = static_cast<VulkanShader&>(translation.shader());
 
-  // Perform translation.
-  // If this fails the shader will be marked as invalid and ignored later.
-  if (!translator.TranslateAnalyzedShader(translation)) {
-    REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
-    return false;
+  // Check AOT prebaked shader cache first!
+  const auto* prebaked = rex::graphics::PrebakedShaderCache::Get().FindShader(shader.ucode_data_hash());
+  if (prebaked && !prebaked->spirv_binary.empty()) {
+    translation.SetPrebakedBinary(prebaked->spirv_binary);
+    shader.SetBindingsFromCache(prebaked->texture_bindings, prebaked->sampler_bindings);
+  } else {
+    // Perform translation on-the-fly.
+    // If this fails the shader will be marked as invalid and ignored later.
+    if (!translator.TranslateAnalyzedShader(translation)) {
+      REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
+      return false;
+    }
   }
   if (translation.GetOrCreateShaderModule() == VK_NULL_HANDLE) {
     return false;

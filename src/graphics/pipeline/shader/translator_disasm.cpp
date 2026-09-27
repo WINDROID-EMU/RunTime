@@ -322,7 +322,7 @@ void ParsedVertexFetchInstruction::Disassemble(string::StringBuffer* out) const 
   } else {
     out->Append("      ");
   }
-  out->Append(opcode_name);
+  out->Append(opcode_name ? opcode_name : "<unknown_vfetch>");
   out->Append(' ');
   DisassembleResultOperand(result, out);
   if (!is_mini_fetch) {
@@ -341,8 +341,12 @@ void ParsedVertexFetchInstruction::Disassemble(string::StringBuffer* out) const 
     out->AppendFormat(", Offset={}", attributes.offset);
   }
   if (attributes.data_format != xenos::VertexFormat::kUndefined) {
-    out->AppendFormat(", DataFormat={}",
-                      kVertexFetchDataFormats[static_cast<int>(attributes.data_format)].name);
+    int fmt_idx = static_cast<int>(attributes.data_format);
+    if (fmt_idx >= 0 && fmt_idx < 0xff && kVertexFetchDataFormats[fmt_idx].name != nullptr) {
+      out->AppendFormat(", DataFormat={}", kVertexFetchDataFormats[fmt_idx].name);
+    } else {
+      out->AppendFormat(", DataFormat={}", fmt_idx);
+    }
   }
   if (!is_mini_fetch && attributes.stride) {
     out->AppendFormat(", Stride={}", attributes.stride);
@@ -377,17 +381,20 @@ void ParsedTextureFetchInstruction::Disassemble(string::StringBuffer* out) const
   } else {
     out->Append("      ");
   }
-  out->Append(opcode_name);
+  out->Append(opcode_name ? opcode_name : "<unknown_tfetch>");
   out->Append(' ');
   bool needs_comma = false;
   if (has_result()) {
     DisassembleResultOperand(result, out);
     needs_comma = true;
   }
-  if (needs_comma) {
-    out->Append(", ");
+  if (operand_count > 0) {
+    if (needs_comma) {
+      out->Append(", ");
+    }
+    DisassembleSourceOperand(operands[0], out);
+    needs_comma = true;
   }
-  DisassembleSourceOperand(operands[0], out);
   if (operand_count > 1) {
     if (needs_comma) {
       out->Append(", ");
@@ -402,28 +409,40 @@ void ParsedTextureFetchInstruction::Disassemble(string::StringBuffer* out) const
     out->Append(", UnnormalizedTextureCoords=true");
   }
   if (attributes.mag_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", MagFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.mag_filter)]);
+    int idx = static_cast<int>(attributes.mag_filter);
+    if (idx >= 0 && idx < 4) {
+      out->AppendFormat(", MagFilter={}", kTextureFilterNames[idx]);
+    }
   }
   if (attributes.min_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", MinFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.min_filter)]);
+    int idx = static_cast<int>(attributes.min_filter);
+    if (idx >= 0 && idx < 4) {
+      out->AppendFormat(", MinFilter={}", kTextureFilterNames[idx]);
+    }
   }
   if (attributes.mip_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", MipFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.mip_filter)]);
+    int idx = static_cast<int>(attributes.mip_filter);
+    if (idx >= 0 && idx < 4) {
+      out->AppendFormat(", MipFilter={}", kTextureFilterNames[idx]);
+    }
   }
   if (attributes.aniso_filter != xenos::AnisoFilter::kUseFetchConst) {
-    out->AppendFormat(", AnisoFilter={}",
-                      kAnisoFilterNames[static_cast<int>(attributes.aniso_filter)]);
+    int idx = static_cast<int>(attributes.aniso_filter);
+    if (idx >= 0 && idx < 7) {
+      out->AppendFormat(", AnisoFilter={}", kAnisoFilterNames[idx]);
+    }
   }
   if (attributes.vol_mag_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", VolMagFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.vol_mag_filter)]);
+    int idx = static_cast<int>(attributes.vol_mag_filter);
+    if (idx >= 0 && idx < 4) {
+      out->AppendFormat(", VolMagFilter={}", kTextureFilterNames[idx]);
+    }
   }
   if (attributes.vol_min_filter != xenos::TextureFilter::kUseFetchConst) {
-    out->AppendFormat(", VolMinFilter={}",
-                      kTextureFilterNames[static_cast<int>(attributes.vol_min_filter)]);
+    int idx = static_cast<int>(attributes.vol_min_filter);
+    if (idx >= 0 && idx < 4) {
+      out->AppendFormat(", VolMinFilter={}", kTextureFilterNames[idx]);
+    }
   }
   if (!attributes.use_computed_lod) {
     out->Append(", UseComputedLOD=false");

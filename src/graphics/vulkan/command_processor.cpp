@@ -974,10 +974,6 @@ bool VulkanCommandProcessor::SetupContext() {
   // Requires the transient descriptor set layouts.
   render_target_cache_ = std::make_unique<VulkanRenderTargetCache>(
       *register_file_, *memory_, draw_resolution_scale_x, draw_resolution_scale_y, *this);
-  if (!render_target_cache_->Initialize(shared_memory_binding_count)) {
-    REXGPU_ERROR("Failed to initialize the render target cache");
-    return false;
-  }
 
   // Shared memory and EDRAM descriptor set layout.
   bool edram_fragment_shader_interlock =
@@ -1023,6 +1019,11 @@ bool VulkanCommandProcessor::SetupContext() {
       *this, *register_file_, *render_target_cache_, guest_shader_vertex_stages_);
   if (!pipeline_cache_->Initialize()) {
     REXGPU_ERROR("Failed to initialize the graphics pipeline cache");
+    return false;
+  }
+
+  if (!render_target_cache_->Initialize(shared_memory_binding_count)) {
+    REXGPU_ERROR("Failed to initialize the render target cache");
     return false;
   }
 
@@ -1779,10 +1780,13 @@ bool VulkanCommandProcessor::SetupContext() {
     return false;
   }
 
+  VkPipelineCache hw_cache =
+      pipeline_cache_ ? pipeline_cache_->hardware_pipeline_cache() : VK_NULL_HANDLE;
+
   // Gamma ramp application compute pipelines.
   swap_apply_gamma_compute_256_entry_table_pipeline_ = ui::vulkan::util::CreateComputePipeline(
       vulkan_device, swap_apply_gamma_compute_pipeline_layout_, shaders::apply_gamma_table_cs,
-      sizeof(shaders::apply_gamma_table_cs));
+      sizeof(shaders::apply_gamma_table_cs), hw_cache);
   if (swap_apply_gamma_compute_256_entry_table_pipeline_ == VK_NULL_HANDLE) {
     REXGPU_WARN(
         "Failed to create the 256-entry table gamma ramp application compute "
@@ -1791,7 +1795,8 @@ bool VulkanCommandProcessor::SetupContext() {
   swap_apply_gamma_compute_256_entry_table_fxaa_luma_pipeline_ =
       ui::vulkan::util::CreateComputePipeline(
           vulkan_device, swap_apply_gamma_compute_pipeline_layout_,
-          shaders::apply_gamma_table_fxaa_luma_cs, sizeof(shaders::apply_gamma_table_fxaa_luma_cs));
+          shaders::apply_gamma_table_fxaa_luma_cs, sizeof(shaders::apply_gamma_table_fxaa_luma_cs),
+          hw_cache);
   if (swap_apply_gamma_compute_256_entry_table_fxaa_luma_pipeline_ == VK_NULL_HANDLE) {
     REXGPU_WARN(
         "Failed to create the 256-entry table gamma ramp application compute "
@@ -1799,13 +1804,14 @@ bool VulkanCommandProcessor::SetupContext() {
   }
   swap_apply_gamma_compute_pwl_pipeline_ = ui::vulkan::util::CreateComputePipeline(
       vulkan_device, swap_apply_gamma_compute_pipeline_layout_, shaders::apply_gamma_pwl_cs,
-      sizeof(shaders::apply_gamma_pwl_cs));
+      sizeof(shaders::apply_gamma_pwl_cs), hw_cache);
   if (swap_apply_gamma_compute_pwl_pipeline_ == VK_NULL_HANDLE) {
     REXGPU_WARN("Failed to create the PWL gamma ramp application compute pipeline");
   }
   swap_apply_gamma_compute_pwl_fxaa_luma_pipeline_ = ui::vulkan::util::CreateComputePipeline(
       vulkan_device, swap_apply_gamma_compute_pipeline_layout_,
-      shaders::apply_gamma_pwl_fxaa_luma_cs, sizeof(shaders::apply_gamma_pwl_fxaa_luma_cs));
+      shaders::apply_gamma_pwl_fxaa_luma_cs, sizeof(shaders::apply_gamma_pwl_fxaa_luma_cs),
+      hw_cache);
   if (swap_apply_gamma_compute_pwl_fxaa_luma_pipeline_ == VK_NULL_HANDLE) {
     REXGPU_WARN(
         "Failed to create the PWL gamma ramp application compute pipeline with "
@@ -1822,7 +1828,7 @@ bool VulkanCommandProcessor::SetupContext() {
       }
       pipeline_out = ui::vulkan::util::CreateComputePipeline(
           vulkan_device, swap_apply_gamma_compute_pipeline_layout_, compute_spirv.data(),
-          sizeof(uint32_t) * compute_spirv.size());
+          sizeof(uint32_t) * compute_spirv.size(), hw_cache);
       if (pipeline_out == VK_NULL_HANDLE) {
         REXGPU_WARN("Failed to create {} pipeline", pipeline_name);
       }
@@ -1851,7 +1857,7 @@ bool VulkanCommandProcessor::SetupContext() {
   } else {
     swap_fxaa_pipeline_ = ui::vulkan::util::CreateComputePipeline(
         vulkan_device, swap_fxaa_pipeline_layout_, swap_fxaa_spirv.data(),
-        sizeof(uint32_t) * swap_fxaa_spirv.size());
+        sizeof(uint32_t) * swap_fxaa_spirv.size(), hw_cache);
     if (swap_fxaa_pipeline_ == VK_NULL_HANDLE) {
       REXGPU_WARN("Failed to create the FXAA compute pipeline");
     }
@@ -1866,7 +1872,7 @@ bool VulkanCommandProcessor::SetupContext() {
   } else {
     swap_fxaa_extreme_pipeline_ = ui::vulkan::util::CreateComputePipeline(
         vulkan_device, swap_fxaa_pipeline_layout_, swap_fxaa_extreme_spirv.data(),
-        sizeof(uint32_t) * swap_fxaa_extreme_spirv.size());
+        sizeof(uint32_t) * swap_fxaa_extreme_spirv.size(), hw_cache);
     if (swap_fxaa_extreme_pipeline_ == VK_NULL_HANDLE) {
       REXGPU_WARN("Failed to create the extreme-quality FXAA compute pipeline");
     }
@@ -1889,7 +1895,7 @@ bool VulkanCommandProcessor::SetupContext() {
                                  &resolve_downscale_pipeline_layout_) == VK_SUCCESS) {
     resolve_downscale_pipeline_ = ui::vulkan::util::CreateComputePipeline(
         vulkan_device, resolve_downscale_pipeline_layout_, shaders::resolve_downscale_cs,
-        sizeof(shaders::resolve_downscale_cs));
+        sizeof(shaders::resolve_downscale_cs), hw_cache);
     if (resolve_downscale_pipeline_ == VK_NULL_HANDLE) {
       REXGPU_WARN("Failed to create Vulkan resolve-downscale readback pipeline");
       ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipelineLayout, device,
@@ -3029,6 +3035,10 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
           "[GPU_TELEMETRY] FPS: {:.1f} | FenceWait: {:.2f}ms | CPU(Draw: {:.2f}ms, Copy: {:.2f}ms, Sub: {:.2f}ms, Swap: {:.2f}ms) | Draws/f: {:.0f} (Vtx: {:.1f}k) | Resolves/f: {:.0f} | Passes/f: {:.0f} | PipeBinds/f: {:.0f}",
           fps, avg_fence_wait_ms, avg_draw_ms, avg_resolve_ms, avg_submit_ms, avg_swap_ms,
           avg_draws, avg_vtx, avg_resolves, avg_passes, avg_binds);
+
+      if (pipeline_cache_) {
+        pipeline_cache_->SaveHardwarePipelineCache();
+      }
 
       telemetry_window_ = {};
       telemetry_window_frames_ = 0;

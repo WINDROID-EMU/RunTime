@@ -17,6 +17,11 @@ static ::plume::RenderFormat GetPlumeFormat(rex::graphics::xenos::TextureFormat 
     case rex::graphics::xenos::TextureFormat::k_DXT4_5: return ::plume::RenderFormat::BC3_UNORM;
     case rex::graphics::xenos::TextureFormat::k_8_8_8_8: return ::plume::RenderFormat::R8G8B8A8_UNORM;
     case rex::graphics::xenos::TextureFormat::k_8_8_8_8_AS_16_16_16_16: return ::plume::RenderFormat::R16G16B16A16_FLOAT;
+    case rex::graphics::xenos::TextureFormat::k_CTX1: return ::plume::RenderFormat::R8G8_UNORM;
+    case rex::graphics::xenos::TextureFormat::k_DXT3A: return ::plume::RenderFormat::BC4_UNORM;
+    case rex::graphics::xenos::TextureFormat::k_DXT5A: return ::plume::RenderFormat::BC4_UNORM;
+    case rex::graphics::xenos::TextureFormat::k_16_16: return ::plume::RenderFormat::R16G16_UNORM;
+    case rex::graphics::xenos::TextureFormat::k_16_16_FLOAT: return ::plume::RenderFormat::R16G16_FLOAT;
     default: return ::plume::RenderFormat::R8G8B8A8_UNORM;
   }
 }
@@ -197,7 +202,9 @@ PlumeTextureCache::SamplerParameters PlumeTextureCache::GetSamplerParameters(
 }
 
 uint32_t PlumeTextureCache::GetHostFormatSwizzle(TextureKey key) const {
-  // Retornamos R, G, B, A padrão por enquanto
+  if (key.format == rex::graphics::xenos::TextureFormat::k_CTX1) {
+    return rex::graphics::xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG;
+  }
   return (0) | (1 << 3) | (2 << 6) | (3 << 9);
 }
 

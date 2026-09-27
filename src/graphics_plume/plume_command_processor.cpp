@@ -6,12 +6,14 @@
 #include "plume_command_processor.h"
 #include "plume_graphics_system.h"
 #include "plume_shader.h"
+#include <rex/graphics/pipeline/shader/prebaked_shader_cache.h>
 
 #include <cmath>
 #include <cstring>
 #include <vector>
 
 #include <xxhash.h>
+#include <android/log.h>
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/memory/utils.h>
@@ -56,11 +58,51 @@ bool PlumeCommandProcessor::Initialize() {
     return false;
   }
   
+  // 3. Carrega cache AOT de shaders pre-compilados do jogo
+  const std::vector<std::string> aot_cache_candidates = {
+      "/storage/emulated/0/Android/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_prebaked.spvcache",
+      "/data/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_prebaked.spvcache",
+      "/data/local/tmp/nfsmw_bench/454107D9_prebaked.spvcache",
+      "shaders/shareable/454107D9_prebaked.spvcache",
+      "454107D9_prebaked.spvcache",
+  };
+  for (const auto& path : aot_cache_candidates) {
+    if (rex::graphics::PrebakedShaderCache::Get().LoadFromFile(path)) {
+      REXLOG_INFO("PlumeCommandProcessor: Carregado cache AOT de shaders: {}", path);
+      __android_log_print(ANDROID_LOG_INFO, "PlumeCommandProcessor",
+                          "[AOT] Cache carregado com sucesso de %s (%zu shaders)",
+                          path.c_str(), rex::graphics::PrebakedShaderCache::Get().Count());
+      break;
+    }
+  }
+
+  // 4. Carrega cache de pipelines nativos da GPU (VkPipelineCache)
+  const std::vector<std::string> hw_cache_candidates = {
+      "/storage/emulated/0/Android/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_hw.vkcache",
+      "/data/data/com.ea.nfsmw/files/cache/shaders/shareable/454107D9_hw.vkcache",
+      "/data/local/tmp/nfsmw_bench/454107D9_hw.vkcache",
+      "shaders/shareable/454107D9_hw.vkcache",
+      "454107D9_hw.vkcache",
+  };
+  hw_pipeline_cache_path_ = hw_cache_candidates[0];
+  if (plume_device_) {
+    for (const auto& path : hw_cache_candidates) {
+      if (plume_device_->loadPipelineCache(path)) {
+        hw_pipeline_cache_path_ = path;
+        REXLOG_INFO("PlumeCommandProcessor: Carregado VkPipelineCache de: {}", path);
+        __android_log_print(ANDROID_LOG_INFO, "PlumeCommandProcessor",
+                            "[VkPipelineCache] Hardware cache carregado com sucesso de %s", path.c_str());
+        break;
+      }
+    }
+  }
+
   return true;
 }
 
 void PlumeCommandProcessor::Shutdown() {
   REXLOG_INFO("PlumeCommandProcessor::Shutdown");
+  SaveHardwarePipelineCache();
   render_target_cache_.reset();
   texture_cache_.reset();
   shared_memory_.reset();
@@ -79,11 +121,13 @@ bool PlumeCommandProcessor::SetupContext() {
       for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
         frames_[i].cmd_list = plume_queue_->createCommandList();
         frames_[i].fence = plume_device_->createCommandFence();
+        frames_[i].acquire_semaphore = plume_device_->createCommandSemaphore();
+        frames_[i].render_semaphore = plume_device_->createCommandSemaphore();
         frames_[i].in_flight = false;
         frames_[i].garbage.clear();
       }
       current_frame_index_ = 0;
-      REXLOG_INFO("PlumeCommandProcessor: direct command queue and command lists/fences created");
+      REXLOG_INFO("PlumeCommandProcessor: direct command queue, lists, fences and semaphores created");
     } else {
       REXLOG_WARN("PlumeCommandProcessor: could not create direct command queue");
     }
@@ -136,6 +180,8 @@ void PlumeCommandProcessor::ShutdownContext() {
       }
       frames_[i].cmd_list.reset();
       frames_[i].fence.reset();
+      frames_[i].acquire_semaphore.reset();
+      frames_[i].render_semaphore.reset();
       frames_[i].garbage.clear();
     }
   }
@@ -158,8 +204,15 @@ void PlumeCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
   (void)frontbuffer_ptr;
   (void)frontbuffer_width;
   (void)frontbuffer_height;
-  REXLOG_DEBUG("PlumeCommandProcessor::IssueSwap: ptr=0x{:08X}, {}x{}",
-               frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+  static uint32_t swap_entry_count = 0;
+  if ((++swap_entry_count % 60) == 1) {
+    __android_log_print(ANDROID_LOG_INFO, "PlumeDebug",
+                        "IssueSwap entry (#%u): ptr=0x%08X, %ux%u",
+                        swap_entry_count, frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+  }
+
+  // Resetar lista de framebuffers limpos neste frame
+  cleared_fbs_this_frame_.clear();
 
   auto& frame = frames_[current_frame_index_];
   if (!frame.cmd_list || !plume_queue_) {
@@ -180,17 +233,35 @@ void PlumeCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
   auto* swapchain = plume_graphics_system_->plume_swapchain();
   if (swapchain) {
     uint32_t texture_index = 0;
-    if (swapchain->acquireTexture(nullptr, &texture_index)) {
+    bool acquired = swapchain->acquireTexture(frame.acquire_semaphore.get(), &texture_index);
+    if (acquired) {
       ::plume::RenderTexture* swap_tex = swapchain->getTexture(texture_index);
-      ::plume::RenderTexture* color_rt = render_target_cache_ ? render_target_cache_->MVP_GetColorTexture() : nullptr;
+      ::plume::RenderTexture* color_rt = render_target_cache_
+          ? render_target_cache_->MVP_GetPrimaryColorTexture(frontbuffer_width, frontbuffer_height)
+          : nullptr;
+      
+      static uint32_t swap_count = 0;
+      if ((++swap_count % 60) == 1) {
+        __android_log_print(ANDROID_LOG_INFO, "PlumeDebug",
+                            "IssueSwap #%u: acquired=%d idx=%u color_rt=%p swap_tex=%p (fb: %ux%u)",
+                            swap_count, acquired, texture_index,
+                            color_rt, swap_tex, frontbuffer_width, frontbuffer_height);
+      }
       
       if (swap_tex && color_rt) {
+        // CRÍTICO: fechar a render pass ativa ANTES das barreiras de layout.
+        // setFramebuffer(nullptr) chama endActiveRenderPass() internamente no plume.
+        // Em Vulkan, barreiras de imagem não podem ser emitidas dentro de uma
+        // render pass ativa.
+        frame.cmd_list->setFramebuffer(nullptr);
+
         ::plume::RenderTextureBarrier barriers_pre[2];
         barriers_pre[0] = ::plume::RenderTextureBarrier(color_rt, ::plume::RenderTextureLayout::COPY_SOURCE);
         barriers_pre[1] = ::plume::RenderTextureBarrier(swap_tex, ::plume::RenderTextureLayout::COPY_DEST);
         frame.cmd_list->barriers(::plume::RenderBarrierStage::ALL, nullptr, 0, barriers_pre, 2);
 
         frame.cmd_list->copyTexture(swap_tex, color_rt);
+
 
         ::plume::RenderTextureBarrier barriers_post[2];
         barriers_post[0] = ::plume::RenderTextureBarrier(swap_tex, ::plume::RenderTextureLayout::PRESENT);
@@ -202,17 +273,25 @@ void PlumeCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
         barriers_post[0] = ::plume::RenderTextureBarrier(swap_tex, ::plume::RenderTextureLayout::PRESENT);
         frame.cmd_list->barriers(::plume::RenderBarrierStage::ALL, nullptr, 0, barriers_post, 1);
       }
-    }
 
-    frame.cmd_list->end();
-    cmd_list_open_ = false;
-    const ::plume::RenderCommandList* lists[] = { frame.cmd_list.get() };
-    plume_queue_->executeCommandLists(lists, 1, nullptr, 0, nullptr, 0, frame.fence.get());
-    frame.in_flight = true;
+      frame.cmd_list->end();
+      cmd_list_open_ = false;
 
-    // Present
-    if (swapchain) {
-      swapchain->present(texture_index, nullptr, 0);
+      const ::plume::RenderCommandList* lists[] = { frame.cmd_list.get() };
+      ::plume::RenderCommandSemaphore* wait_sems[] = { frame.acquire_semaphore.get() };
+      ::plume::RenderCommandSemaphore* signal_sems[] = { frame.render_semaphore.get() };
+      plume_queue_->executeCommandLists(lists, 1, wait_sems, 1, signal_sems, 1, frame.fence.get());
+      frame.in_flight = true;
+
+      // Present
+      ::plume::RenderCommandSemaphore* present_wait_sems[] = { frame.render_semaphore.get() };
+      swapchain->present(texture_index, present_wait_sems, 1);
+    } else {
+      frame.cmd_list->end();
+      cmd_list_open_ = false;
+      const ::plume::RenderCommandList* lists[] = { frame.cmd_list.get() };
+      plume_queue_->executeCommandLists(lists, 1, nullptr, 0, nullptr, 0, frame.fence.get());
+      frame.in_flight = true;
     }
   } else {
     // Sem swapchain ou sem framebuffer ainda: apenas fecha e submete vazio
@@ -245,6 +324,27 @@ void PlumeCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
     texture_cache_->BeginSubmission(0); // Dummy sub index
   }
 
+  // Salva periodicamente o cache de pipelines de hardware da GPU se novos pipelines foram criados
+  if (graphics_pipelines_.size() != last_saved_pipeline_count_) {
+    if (++frames_since_last_pipeline_save_ >= 300) {
+      SaveHardwarePipelineCache();
+      frames_since_last_pipeline_save_ = 0;
+    }
+  }
+}
+
+void PlumeCommandProcessor::SaveHardwarePipelineCache() {
+  if (!plume_device_ || hw_pipeline_cache_path_.empty()) return;
+  if (graphics_pipelines_.size() == last_saved_pipeline_count_) return;
+
+  if (plume_device_->savePipelineCache(hw_pipeline_cache_path_)) {
+    last_saved_pipeline_count_ = graphics_pipelines_.size();
+    REXLOG_INFO("PlumeCommandProcessor: Salvo VkPipelineCache ({} pipelines) em {}",
+                last_saved_pipeline_count_, hw_pipeline_cache_path_);
+    __android_log_print(ANDROID_LOG_INFO, "PlumeCommandProcessor",
+                        "[VkPipelineCache] Hardware cache salvo com sucesso em %s (%zu pipelines)",
+                        hw_pipeline_cache_path_.c_str(), last_saved_pipeline_count_);
+  }
 }
 
 rex::graphics::Shader* PlumeCommandProcessor::LoadShader(rex::graphics::xenos::ShaderType shader_type,
@@ -278,6 +378,11 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
                                       bool major_mode_explicit) {
   (void)major_mode_explicit;
   transpiler_.ObserveDraw("DRAW", static_cast<uint32_t>(prim_type), index_count, index_buffer_info != nullptr);
+
+  rex::graphics::xenos::EdramMode edram_mode = register_file_->Get<rex::graphics::reg::RB_MODECONTROL>().edram_mode;
+  if (edram_mode == rex::graphics::xenos::EdramMode::kCopy) {
+    return IssueCopy();
+  }
 
   ::plume::RenderPrimitiveTopology topology = ::plume::RenderPrimitiveTopology::TRIANGLE_LIST;
   switch (prim_type) {
@@ -344,8 +449,23 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
 
   // -------------------------------------------------------------------------
   // Fase D.1: Begin lazy do command list (uma vez por frame)
+  // IMPORTANTE: begin() DEVE ocorrer ANTES de qualquer chamada vkCmd*
+  // incluindo setFramebuffer, setViewports, setScissors, setPipeline, etc.
   // -------------------------------------------------------------------------
   if (!cmd_list_open_) {
+    // CRITICAL: Se o frame atual ainda está em voo (GPU executando), precisamos
+    // esperar pela fence ANTES de chamar vkResetCommandBuffer dentro de begin().
+    // Chamar vkResetCommandBuffer num command buffer PENDING resulta em crash no
+    // driver Adreno (SIGSEGV dentro de vkCmdBindPipeline).
+    auto& cur_frame = frames_[current_frame_index_];
+    if (cur_frame.in_flight && cur_frame.fence && plume_queue_) {
+      __android_log_print(ANDROID_LOG_WARN, "PlumeCommandProcessor",
+                          "IssueDraw: frame %u ainda em voo, aguardando fence antes de begin()",
+                          current_frame_index_);
+      plume_queue_->waitForCommandFence(cur_frame.fence.get());
+      cur_frame.in_flight = false;
+      cur_frame.garbage.clear();
+    }
     GetActiveCommandList()->begin();
     cmd_list_open_ = true;
     if (texture_cache_) {
@@ -355,8 +475,26 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
 
   if (render_target_cache_) {
     // Para MVP, o framebuffer eh resolvido pelo PlumeRenderTargetCache.
-    ::plume::RenderFramebuffer* fb = render_target_cache_->MVP_GetOrCreateFramebuffer(plume_device_, fb_width, fb_height, color_fmt, depth_fmt);
-    if (fb) GetActiveCommandList()->setFramebuffer(fb);
+    ::plume::RenderFramebuffer* fb = render_target_cache_->MVP_GetOrCreateFramebuffer(
+        plume_device_, fb_width, fb_height, color_fmt, depth_fmt);
+    if (fb) {
+      GetActiveCommandList()->setFramebuffer(fb);
+
+      // -----------------------------------------------------------------------
+      // Clear: emite clearColor + clearDepth UMA VEZ por frame por framebuffer.
+      // Em Vulkan, o conteúdo inicial de um render target é UNDEFINED, causando
+      // tela preta. O clear também dispara checkActiveRenderPass() internamente,
+      // iniciando o VkRenderPass antes de qualquer draw call.
+      // -----------------------------------------------------------------------
+      if (cleared_fbs_this_frame_.insert(fb).second) {
+        ::plume::RenderColor clear_color = { 0.0f, 0.0f, 0.0f, 1.0f };
+        GetActiveCommandList()->clearColor(0, clear_color, nullptr, 0);
+        GetActiveCommandList()->clearDepthStencil(true, true, 1.0f, 0, nullptr, 0);
+        __android_log_print(ANDROID_LOG_INFO, "PlumeCommandProcessor",
+                            "[Clear] Framebuffer %p cleared (%ux%u fmt=%d)",
+                            fb, fb_width, fb_height, static_cast<int>(color_fmt));
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -409,6 +547,11 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
   }
 
   // -------------------------------------------------------------------------
+  // Garbage de recursos deste draw call (mantidos vivos até a fence do frame)
+  // -------------------------------------------------------------------------
+  PlumeFrameContext::FrameGarbage garbage;
+
+  // -------------------------------------------------------------------------
   // Fase B.2: Vertex Buffers — iteramos os fetch constants do vertex shader
   // -------------------------------------------------------------------------
   {
@@ -421,8 +564,6 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
       // Coletamos os views e slots
       std::vector<::plume::RenderVertexBufferView> vb_views;
       std::vector<::plume::RenderInputSlot>        vb_slots;
-      // Mantemos os buffers vivos até o fim do draw
-      std::vector<std::unique_ptr<::plume::RenderBuffer>> vb_buffers;
 
       for (uint32_t i = 0; i < num_words; ++i) {
         uint32_t bits = const_map.vertex_fetch_bitmap[i];
@@ -490,7 +631,7 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
               0,
               ::plume::RenderInputSlotClassification::PER_VERTEX_DATA);
           vb_slots.push_back(input_slot);
-          vb_buffers.push_back(std::move(plume_buf));
+          garbage.vb_buffers.push_back(std::move(plume_buf));
         }
       }
 
@@ -507,7 +648,6 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
   // -------------------------------------------------------------------------
   // Fase B.3: Index Buffer
   // -------------------------------------------------------------------------
-  std::unique_ptr<::plume::RenderBuffer> ib_buffer;
   if (index_buffer_info != nullptr && index_buffer_info->count > 0 && memory_) {
     // Tamanho de cada index
     bool is_32bit = (index_buffer_info->format ==
@@ -525,18 +665,18 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
       auto ib_desc = ::plume::RenderBufferDesc::IndexBuffer(
           ib_size_bytes,
           ::plume::RenderHeapType::UPLOAD);
-      ib_buffer = plume_device_->createBuffer(ib_desc);
-      if (ib_buffer) {
-        void* mapped = ib_buffer->map();
+      garbage.ib_buffer = plume_device_->createBuffer(ib_desc);
+      if (garbage.ib_buffer) {
+        void* mapped = garbage.ib_buffer->map();
         if (mapped) {
           std::memcpy(mapped, src, ib_size_bytes);
-          ib_buffer->unmap();
+          garbage.ib_buffer->unmap();
         }
         ::plume::RenderFormat ib_format = is_32bit
             ? ::plume::RenderFormat::R32_UINT
             : ::plume::RenderFormat::R16_UINT;
         ::plume::RenderIndexBufferView ib_view(
-            ib_buffer->at(0),
+            garbage.ib_buffer->at(0),
             ib_size_bytes,
             ib_format);
         GetActiveCommandList()->setIndexBuffer(&ib_view);
@@ -547,7 +687,6 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
   // -------------------------------------------------------------------------
   // Fase G, F & H: Viewport, Scissor, Uniforms e Texturas
   // -------------------------------------------------------------------------
-  PlumeFrameContext::FrameGarbage garbage;
 
   if (texture_cache_) {
     uint32_t used_textures = 0;
@@ -602,6 +741,24 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
   system_constants_.ndc_offset[1] = viewport_info.ndc_offset[1];
   system_constants_.ndc_offset[2] = viewport_info.ndc_offset[2];
 
+  // Diagnóstico: log dos valores NDC/viewport — só para o framebuffer principal (>100px altura)
+  {
+    static uint32_t diag_count = 0;
+    static uint32_t diag_main = 0;
+    diag_count++;
+    if (vp.height > 100.0f && ++diag_main <= 5) {
+      __android_log_print(ANDROID_LOG_INFO, "PlumeNDC",
+          "MAIN_VP[%u]: xy_off=(%.1f,%.1f) xy_ext=(%.1f,%.1f) z=(%.3f,%.3f)"
+          " ndc_scale=(%.3f,%.3f,%.3f) ndc_off=(%.3f,%.3f,%.3f)",
+          diag_main,
+          vp.x, vp.y, vp.width, vp.height, vp.minDepth, vp.maxDepth,
+          system_constants_.ndc_scale[0], system_constants_.ndc_scale[1],
+          system_constants_.ndc_scale[2],
+          system_constants_.ndc_offset[0], system_constants_.ndc_offset[1],
+          system_constants_.ndc_offset[2]);
+    }
+  }
+
   garbage.sys_buf = plume_device_->createBuffer(
       ::plume::RenderBufferDesc::UploadBuffer(sizeof(system_constants_), ::plume::RenderBufferFlag::CONSTANT));
   void* sys_ptr = garbage.sys_buf->map();
@@ -610,55 +767,71 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
       garbage.sys_buf->unmap();
   }
 
-  // Float Constants (512 vec4s)
-  size_t float_size = 512 * 4 * sizeof(float);
-  const void* float_src = &register_file_->values[rex::graphics::XE_GPU_REG_SHADER_CONSTANT_000_X];
+  // Float Constants: Vertex (256 vec4 = 4096 bytes) e Pixel (256 vec4 = 4096 bytes)
+  constexpr size_t kFloatConstantsSize = 256 * 4 * sizeof(float);
   
   garbage.vs_float_buf = plume_device_->createBuffer(
-      ::plume::RenderBufferDesc::UploadBuffer(float_size, ::plume::RenderBufferFlag::CONSTANT));
+      ::plume::RenderBufferDesc::UploadBuffer(kFloatConstantsSize, ::plume::RenderBufferFlag::CONSTANT));
   void* vs_ptr = garbage.vs_float_buf->map();
-  if(vs_ptr) {
-      std::memcpy(vs_ptr, float_src, float_size);
-      garbage.vs_float_buf->unmap();
+  if (vs_ptr) {
+    std::memcpy(vs_ptr, &register_file_->values[rex::graphics::XE_GPU_REG_SHADER_CONSTANT_000_X], kFloatConstantsSize);
+    garbage.vs_float_buf->unmap();
   }
   
   garbage.ps_float_buf = plume_device_->createBuffer(
-      ::plume::RenderBufferDesc::UploadBuffer(float_size, ::plume::RenderBufferFlag::CONSTANT));
+      ::plume::RenderBufferDesc::UploadBuffer(kFloatConstantsSize, ::plume::RenderBufferFlag::CONSTANT));
   void* ps_ptr = garbage.ps_float_buf->map();
-  if(ps_ptr) {
-      std::memcpy(ps_ptr, float_src, float_size);
-      garbage.ps_float_buf->unmap();
+  if (ps_ptr) {
+    std::memcpy(ps_ptr, &register_file_->values[rex::graphics::XE_GPU_REG_SHADER_CONSTANT_256_X], kFloatConstantsSize);
+    garbage.ps_float_buf->unmap();
   }
 
-  // Bool/Loop Constants (256 bytes)
+  // Bool/Loop Constants: 256 bools (32 bytes) + 32 loops (128 bytes) = 160 bytes
+  constexpr size_t kBoolLoopConstantsSize = sizeof(uint32_t) * (8 + 32);
   garbage.bool_buf = plume_device_->createBuffer(
       ::plume::RenderBufferDesc::UploadBuffer(256, ::plume::RenderBufferFlag::CONSTANT));
+  void* bool_ptr = garbage.bool_buf->map();
+  if (bool_ptr) {
+    std::memcpy(bool_ptr, &register_file_->values[rex::graphics::XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031], kBoolLoopConstantsSize);
+    garbage.bool_buf->unmap();
+  }
   
-  // Fetch Constants (32 * 6 dwords = 768 bytes)
+  // Fetch Constants: 32 * 6 dwords = 768 bytes
+  constexpr size_t kFetchConstantsSize = sizeof(uint32_t) * 6 * 32;
   garbage.fetch_buf = plume_device_->createBuffer(
-      ::plume::RenderBufferDesc::UploadBuffer(768, ::plume::RenderBufferFlag::CONSTANT));
+      ::plume::RenderBufferDesc::UploadBuffer(kFetchConstantsSize, ::plume::RenderBufferFlag::CONSTANT));
+  void* fetch_ptr = garbage.fetch_buf->map();
+  if (fetch_ptr) {
+    std::memcpy(fetch_ptr, &register_file_->values[rex::graphics::XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0], kFetchConstantsSize);
+    garbage.fetch_buf->unmap();
+  }
 
   // Cria e Preenche o Descriptor Set (set 1 = kDescriptorSetConstants)
   ::plume::RenderDescriptorRange ranges[5];
-  for(int i = 0; i < 5; i++) {
-      ranges[i].type = ::plume::RenderDescriptorRangeType::CONSTANT_BUFFER;
-      ranges[i].count = 1;
-      ranges[i].binding = i;
+  for (int i = 0; i < 5; i++) {
+    ranges[i].type = ::plume::RenderDescriptorRangeType::CONSTANT_BUFFER;
+    ranges[i].count = 1;
+    ranges[i].binding = i;
   }
   ::plume::RenderDescriptorSetDesc set_desc(ranges, 5);
   garbage.descriptor_set = plume_device_->createDescriptorSet(set_desc);
   
   if (garbage.descriptor_set) {
-      garbage.descriptor_set->setBuffer(0, garbage.sys_buf.get());
-      garbage.descriptor_set->setBuffer(1, garbage.vs_float_buf.get());
-      garbage.descriptor_set->setBuffer(2, garbage.ps_float_buf.get());
-      garbage.descriptor_set->setBuffer(3, garbage.bool_buf.get());
-      garbage.descriptor_set->setBuffer(4, garbage.fetch_buf.get());
+    garbage.descriptor_set->setBuffer(0, garbage.sys_buf.get());
+    garbage.descriptor_set->setBuffer(1, garbage.vs_float_buf.get());
+    garbage.descriptor_set->setBuffer(2, garbage.ps_float_buf.get());
+    garbage.descriptor_set->setBuffer(3, garbage.bool_buf.get());
+    garbage.descriptor_set->setBuffer(4, garbage.fetch_buf.get());
   }
 
   // -------------------------------------------------------------------------
   // Fase B.4: Pipeline, Descriptors e Draw Call
   // -------------------------------------------------------------------------
+  if (!pipe.pipeline) {
+    __android_log_print(ANDROID_LOG_ERROR, "PlumeCommandProcessor",
+                        "ProcessDraw: pipe.pipeline is null! Skipping draw call.");
+    return false;
+  }
   GetActiveCommandList()->setGraphicsPipelineLayout(pipe.layout);
   GetActiveCommandList()->setPipeline(pipe.pipeline);
 
@@ -746,13 +919,13 @@ bool PlumeCommandProcessor::IssueDraw(rex::graphics::xenos::PrimitiveType prim_t
     }
   }
 
-  frames_[current_frame_index_].garbage.push_back(std::move(garbage));
-
-  if (ib_buffer && index_buffer_info != nullptr && index_buffer_info->count > 0) {
+  if (garbage.ib_buffer && index_buffer_info != nullptr && index_buffer_info->count > 0) {
     GetActiveCommandList()->drawIndexedInstanced(index_count, 1, 0, 0, 0);
   } else {
     GetActiveCommandList()->drawInstanced(index_count, 1, 0, 0);
   }
+
+  frames_[current_frame_index_].garbage.push_back(std::move(garbage));
 
   return true;
 }
@@ -827,8 +1000,13 @@ bool PlumeCommandProcessor::IssueCopy() {
   };
   ::plume::RenderPipelineLayoutDesc layout_desc(nullptr, 0, set_descs, 4);
 
+  __android_log_print(ANDROID_LOG_INFO, "PlumeDebug",
+                      "Creating PipelineLayout: t_vs=%u s_vs=%u t_ps=%u s_ps=%u | set2_ranges=%u set3_ranges=%u",
+                      t_vs, s_vs, t_ps, s_ps, (uint32_t)set2_ranges.size(), (uint32_t)set3_ranges.size());
+
   auto pipeline_layout = plume_device_->createPipelineLayout(layout_desc);
   if (!pipeline_layout) {
+    __android_log_print(ANDROID_LOG_ERROR, "PlumeDebug", "createPipelineLayout FAILED!");
     REXLOG_ERROR("PlumeCommandProcessor: failed to create pipeline layout (t_vs={}, s_vs={}, t_ps={}, s_ps={})",
                  t_vs, s_vs, t_ps, s_ps);
     return nullptr;
@@ -1054,8 +1232,17 @@ PlumeCommandProcessor::PlumePipeline PlumeCommandProcessor::GetOrCreateGraphicsP
   desc.renderTargetFormat[0] = color_format;
   desc.depthTargetFormat = ::plume::RenderFormat::D32_FLOAT_S8_UINT;
   
+  __android_log_print(ANDROID_LOG_INFO, "PlumeDebug",
+                      "Creating GraphicsPipeline: VS=0x%016llX PS=0x%016llX t_vs=%u s_vs=%u t_ps=%u s_ps=%u topology=%u color_fmt=%u",
+                      (unsigned long long)(vs ? vs->ucode_data_hash() : 0),
+                      (unsigned long long)(ps ? ps->ucode_data_hash() : 0),
+                      t_vs, s_vs, t_ps, s_ps, (uint32_t)topology, (uint32_t)color_format);
+
   auto pipeline = plume_device_->createGraphicsPipeline(desc);
   if (!pipeline) {
+    __android_log_print(ANDROID_LOG_ERROR, "PlumeDebug", "createGraphicsPipeline failed! (VS=0x%016llX, PS=0x%016llX)",
+                        (unsigned long long)(vs ? vs->ucode_data_hash() : 0),
+                        (unsigned long long)(ps ? ps->ucode_data_hash() : 0));
     REXLOG_ERROR("PlumeCommandProcessor: createGraphicsPipeline failed!");
     return {};
   }

@@ -161,6 +161,8 @@ add_subdirectory(src/system)
 add_subdirectory(src/kernel)
 add_subdirectory(src/codegen)
 add_subdirectory(src/rexglue)
+add_subdirectory(tools/rex_render_benchmark)
+add_subdirectory(tools/rex_aot_shader_baker)
 
 if(REXGLUE_BUILD_TESTS)
     enable_testing()

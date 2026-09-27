@@ -607,6 +607,10 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
   create_direct_resolve_pipeline_layout(descriptor_set_layout_sampled_image_x2_,
                                         &direct_resolve_pipeline_layout_depth_);
 
+  VkPipelineCache hw_cache = command_processor_.pipeline_cache()
+                                 ? command_processor_.pipeline_cache()->hardware_pipeline_cache()
+                                 : VK_NULL_HANDLE;
+
   // Resolve copy pipelines.
   for (size_t i = 0; i < size_t(draw_util::ResolveCopyShaderIndex::kCount); ++i) {
     const draw_util::ResolveCopyShaderInfo& resolve_copy_shader_info =
@@ -620,7 +624,8 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
         draw_resolution_scaled ? resolve_copy_shader_code.scaled
                                : resolve_copy_shader_code.unscaled,
         draw_resolution_scaled ? resolve_copy_shader_code.scaled_size_bytes
-                               : resolve_copy_shader_code.unscaled_size_bytes);
+                               : resolve_copy_shader_code.unscaled_size_bytes,
+        hw_cache);
     if (resolve_copy_pipeline == VK_NULL_HANDLE) {
       REXGPU_ERROR(
           "VulkanRenderTargetCache: Failed to create the resolve copy "
@@ -683,7 +688,7 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
           host_depth_store_shaders[i];
       VkPipeline host_depth_store_pipeline = ui::vulkan::util::CreateComputePipeline(
           vulkan_device, host_depth_store_pipeline_layout_, host_depth_store_shader.first,
-          host_depth_store_shader.second);
+          host_depth_store_shader.second, hw_cache);
       if (host_depth_store_pipeline == VK_NULL_HANDLE) {
         REXGPU_ERROR(
             "VulkanRenderTargetCache: Failed to create the {}-sample host "
@@ -858,7 +863,8 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
         draw_resolution_scaled ? shaders::resolve_clear_32bpp_scaled_cs
                                : shaders::resolve_clear_32bpp_cs,
         draw_resolution_scaled ? sizeof(shaders::resolve_clear_32bpp_scaled_cs)
-                               : sizeof(shaders::resolve_clear_32bpp_cs));
+                               : sizeof(shaders::resolve_clear_32bpp_cs),
+        hw_cache);
     if (resolve_fsi_clear_32bpp_pipeline_ == VK_NULL_HANDLE) {
       REXGPU_ERROR(
           "VulkanRenderTargetCache: Failed to create the 32bpp resolve EDRAM "
@@ -871,7 +877,8 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
         draw_resolution_scaled ? shaders::resolve_clear_64bpp_scaled_cs
                                : shaders::resolve_clear_64bpp_cs,
         draw_resolution_scaled ? sizeof(shaders::resolve_clear_64bpp_scaled_cs)
-                               : sizeof(shaders::resolve_clear_64bpp_cs));
+                               : sizeof(shaders::resolve_clear_64bpp_cs),
+        hw_cache);
     if (resolve_fsi_clear_64bpp_pipeline_ == VK_NULL_HANDLE) {
       REXGPU_ERROR(
           "VulkanRenderTargetCache: Failed to create the 64bpp resolve EDRAM "
@@ -1127,20 +1134,6 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
                                       uint32_t& written_address_out, uint32_t& written_length_out) {
   written_address_out = 0;
   written_length_out = 0;
-
-  // ==========================================
-  // NFSMW Recomp: eDRAM Resolve Bypass
-  // ==========================================
-  // Bypasses the heavily unoptimized eDRAM to System Memory Resolve.
-  // This forwards the base address downstream as if it resolved instantly.
-  // The Texture cache or presentation will be modified to source from this frame's 
-  // FBO directly instead of the guest memory copy.
-  if (GetPath() == Path::kHostRenderTargets && REXCVAR_GET(direct_host_resolve)) {
-      written_address_out = register_file()[XE_GPU_REG_RB_COPY_DEST_BASE] & 0x1FFFFFFF;
-      written_length_out = 1; // Fake length to signal success downstream
-      return true;
-  }
-  // ==========================================
 
   bool draw_resolution_scaled = IsDrawResolutionScaled();
 
@@ -5968,7 +5961,8 @@ VkPipeline VulkanRenderTargetCache::GetDumpPipeline(DumpPipelineKey key) {
   VkPipeline pipeline = ui::vulkan::util::CreateComputePipeline(
       command_processor_.GetVulkanDevice(),
       key.is_depth ? dump_pipeline_layout_depth_ : dump_pipeline_layout_color_,
-      reinterpret_cast<const uint32_t*>(shader_code.data()), sizeof(uint32_t) * shader_code.size());
+      reinterpret_cast<const uint32_t*>(shader_code.data()), sizeof(uint32_t) * shader_code.size(),
+      command_processor_.pipeline_cache() ? command_processor_.pipeline_cache()->hardware_pipeline_cache() : VK_NULL_HANDLE);
   if (pipeline == VK_NULL_HANDLE) {
     REXGPU_ERROR(
         "VulkanRenderTargetCache: Failed to create a render target dumping "

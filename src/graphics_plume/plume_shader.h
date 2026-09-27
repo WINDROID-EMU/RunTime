@@ -7,7 +7,9 @@
 
 #include <rex/graphics/pipeline/shader/spirv.h>
 #include <rex/graphics/pipeline/shader/spirv_translator.h>
+#include <rex/graphics/pipeline/shader/prebaked_shader_cache.h>
 #include <plume_render_interface.h>
+#include <android/log.h>
 
 namespace rex::graphics_plume {
 
@@ -35,14 +37,14 @@ class PlumeShader : public rex::graphics::SpirvShader {
       return nullptr;
     }
 
-    auto* translation = GetOrCreateTranslation(modification);
-    if (!translation) {
-      return nullptr;
-    }
-
     if (!is_ucode_analyzed()) {
       rex::string::StringBuffer disasm_buffer;
       AnalyzeUcode(disasm_buffer);
+    }
+
+    auto* translation = GetOrCreateTranslation(modification);
+    if (!translation) {
+      return nullptr;
     }
 
     if (!translation->is_valid()) {
@@ -54,6 +56,9 @@ class PlumeShader : public rex::graphics::SpirvShader {
       features.full_draw_index_uint32 = true;
       rex::graphics::SpirvShaderTranslator translator(features, false, false, false);
       if (!translator.TranslateAnalyzedShader(*translation)) {
+        __android_log_print(ANDROID_LOG_ERROR, "PlumeShader",
+                            "TranslateAnalyzedShader failed for 0x%016llX mod=0x%016llX",
+                            (unsigned long long)ucode_data_hash(), (unsigned long long)modification);
         return nullptr;
       }
     }
@@ -70,6 +75,7 @@ class PlumeShader : public rex::graphics::SpirvShader {
         ::plume::RenderShaderFormat::SPIRV);
 
     if (!render_shader) {
+      __android_log_print(ANDROID_LOG_ERROR, "PlumeDebug", "createShader failed!");
       return nullptr;
     }
 

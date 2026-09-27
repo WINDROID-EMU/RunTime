@@ -60,17 +60,19 @@ void ConvertTexelCTX1ToR8G8(xenos::Endian endian, void* output, const void* inpu
   const uint32_t bytes_per_block = 8;
   CopySwapBlock(endian, block.data, input, bytes_per_block);
 
+  // Fast integer approximation of (2/3*a + 1/3*b) and (1/3*a + 2/3*b)
   uint8_t cr[4] = {block.r0, block.r1,
-                   static_cast<uint8_t>(2.f / 3.f * block.r0 + 1.f / 3.f * block.r1),
-                   static_cast<uint8_t>(1.f / 3.f * block.r0 + 2.f / 3.f * block.r1)};
+                   static_cast<uint8_t>(((2 * block.r0 + block.r1) * 85 + 128) >> 8),
+                   static_cast<uint8_t>(((block.r0 + 2 * block.r1) * 85 + 128) >> 8)};
   uint8_t cg[4] = {block.g0, block.g1,
-                   static_cast<uint8_t>(2.f / 3.f * block.g0 + 1.f / 3.f * block.g1),
-                   static_cast<uint8_t>(1.f / 3.f * block.g0 + 2.f / 3.f * block.g1)};
+                   static_cast<uint8_t>(((2 * block.g0 + block.g1) * 85 + 128) >> 8),
+                   static_cast<uint8_t>(((block.g0 + 2 * block.g1) * 85 + 128) >> 8)};
 
   auto output_bytes = static_cast<uint8_t*>(output);
   for (uint32_t oy = 0; oy < 4; ++oy) {
+    uint32_t row_shift = oy * 8;
     for (uint32_t ox = 0; ox < 4; ++ox) {
-      uint8_t xx = (block.xx >> (((ox + (oy * 4)) * 2))) & 3;
+      uint8_t xx = (block.xx >> (row_shift + (ox * 2))) & 3;
       output_bytes[(oy * length) + (ox * 2) + 0] = cr[xx];
       output_bytes[(oy * length) + (ox * 2) + 1] = cg[xx];
     }
@@ -101,12 +103,122 @@ static uint32_t TiledOffset2DColumn(uint32_t x, uint32_t y, uint32_t log2_bpp,
          (((((y & 8) >> 2) + (x >> 3)) & 3) << 6);
 }
 
-void Untile(uint8_t* output_buffer, const uint8_t* input_buffer, const UntileInfo* untile_info) {
-  SCOPE_profile_cpu_f("gpu");
-  assert_not_null(untile_info);
-  assert_not_null(untile_info->input_format_info);
-  assert_not_null(untile_info->output_format_info);
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <vector>
 
+class UntileWorkerPool {
+ public:
+  static UntileWorkerPool& Instance() {
+    static UntileWorkerPool pool;
+    return pool;
+  }
+
+  void ParallelFor(uint32_t total_count, const std::function<void(uint32_t, uint32_t)>& func) {
+    if (total_count < 64 || workers_.empty()) {
+      func(0, total_count);
+      return;
+    }
+
+    std::unique_lock<std::mutex> lock(mutex_);
+    uint32_t num_threads = static_cast<uint32_t>(workers_.size() + 1);
+    uint32_t chunk_size = (total_count + num_threads - 1) / num_threads;
+
+    current_func_ = &func;
+    chunk_size_ = chunk_size;
+    total_count_ = total_count;
+    pending_tasks_.store(static_cast<int>(workers_.size()), std::memory_order_relaxed);
+    work_available_ = true;
+    generation_++;
+
+    cv_work_.notify_all();
+    lock.unlock();
+
+    // Calling thread executes its slice (the last chunk)
+    uint32_t main_start = static_cast<uint32_t>(workers_.size()) * chunk_size;
+    if (main_start < total_count) {
+      func(main_start, total_count);
+    }
+
+    // Wait for all workers to finish
+    lock.lock();
+    cv_done_.wait(lock, [this]() {
+      return pending_tasks_.load(std::memory_order_acquire) == 0;
+    });
+    work_available_ = false;
+  }
+
+ private:
+  UntileWorkerPool() : running_(true), work_available_(false), generation_(0) {
+    unsigned int hw = std::thread::hardware_concurrency();
+    uint32_t worker_count = (hw > 1) ? std::min(3u, hw - 1) : 0;
+    workers_.reserve(worker_count);
+    for (uint32_t i = 0; i < worker_count; ++i) {
+      workers_.emplace_back(&UntileWorkerPool::WorkerLoop, this, i);
+    }
+  }
+
+  ~UntileWorkerPool() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      running_ = false;
+      work_available_ = true;
+      generation_++;
+    }
+    cv_work_.notify_all();
+    for (auto& w : workers_) {
+      if (w.joinable()) {
+        w.join();
+      }
+    }
+  }
+
+  void WorkerLoop(uint32_t worker_index) {
+    uint64_t last_gen = 0;
+    while (true) {
+      std::unique_lock<std::mutex> lock(mutex_);
+      cv_work_.wait(lock, [this, &last_gen]() {
+        return !running_ || (work_available_ && generation_ != last_gen);
+      });
+
+      if (!running_) break;
+
+      last_gen = generation_;
+      uint32_t chunk = chunk_size_;
+      uint32_t total = total_count_;
+      const auto* fn = current_func_;
+      lock.unlock();
+
+      uint32_t start = worker_index * chunk;
+      uint32_t end = std::min(start + chunk, total);
+      if (start < end && fn) {
+        (*fn)(start, end);
+      }
+
+      if (pending_tasks_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        std::lock_guard<std::mutex> d_lock(mutex_);
+        cv_done_.notify_one();
+      }
+    }
+  }
+
+  std::vector<std::thread> workers_;
+  std::mutex mutex_;
+  std::condition_variable cv_work_;
+  std::condition_variable cv_done_;
+  std::atomic<int> pending_tasks_{0};
+  const std::function<void(uint32_t, uint32_t)>* current_func_ = nullptr;
+  uint32_t chunk_size_ = 0;
+  uint32_t total_count_ = 0;
+  uint64_t generation_ = 0;
+  bool running_ = true;
+  bool work_available_ = false;
+};
+
+static void UntileRowRange(uint8_t* output_buffer, const uint8_t* input_buffer,
+                           const UntileInfo* untile_info, uint32_t start_y, uint32_t end_y) {
   uint32_t input_bytes_per_block = untile_info->input_format_info->bytes_per_block();
   uint32_t output_bytes_per_block = untile_info->output_format_info->bytes_per_block();
   uint32_t output_pitch = untile_info->output_pitch * output_bytes_per_block;
@@ -115,16 +227,110 @@ void Untile(uint8_t* output_buffer, const uint8_t* input_buffer, const UntileInf
   auto log2_bpp =
       (input_bytes_per_block / 4) + ((input_bytes_per_block / 2) >> (input_bytes_per_block / 4));
 
-  // Offset to the current row, in bytes.
-  uint32_t output_row_offset = 0;
-  for (uint32_t y = 0; y < untile_info->height; y++) {
+  bool is_direct_copy = (untile_info->input_format_info == untile_info->output_format_info);
+
+  // Fast-path: Direct vectorized copy without callback overhead
+  if (is_direct_copy) {
+    if (output_bytes_per_block == 8) { // DXT1 / BC1 (64-bit blocks)
+      uint32_t output_row_offset = start_y * output_pitch;
+      for (uint32_t y = start_y; y < end_y; ++y) {
+        uint32_t actual_y = untile_info->offset_y + y;
+        uint32_t input_row_offset = TiledOffset2DRow(actual_y, untile_info->input_pitch, 3);
+        uint8_t* __restrict out_row = output_buffer + output_row_offset;
+        uint32_t off_x = untile_info->offset_x;
+
+        for (uint32_t x = 0; x < untile_info->width; ++x) {
+          uint32_t in_offset = TiledOffset2DColumn(off_x + x, actual_y, 3, input_row_offset) & ~7u;
+          *reinterpret_cast<uint64_t*>(out_row + x * 8) =
+              *reinterpret_cast<const uint64_t*>(input_buffer + in_offset);
+        }
+        output_row_offset += output_pitch;
+      }
+      return;
+    } else if (output_bytes_per_block == 16) { // DXT3, DXT5 / BC2, BC3 (128-bit blocks)
+      uint32_t output_row_offset = start_y * output_pitch;
+      for (uint32_t y = start_y; y < end_y; ++y) {
+        uint32_t actual_y = untile_info->offset_y + y;
+        uint32_t input_row_offset = TiledOffset2DRow(actual_y, untile_info->input_pitch, 4);
+        uint8_t* __restrict out_row = output_buffer + output_row_offset;
+        uint32_t off_x = untile_info->offset_x;
+
+        for (uint32_t x = 0; x < untile_info->width; ++x) {
+          uint32_t in_offset = TiledOffset2DColumn(off_x + x, actual_y, 4, input_row_offset) & ~15u;
+          const uint64_t* __restrict src = reinterpret_cast<const uint64_t*>(input_buffer + in_offset);
+          uint64_t* __restrict dst = reinterpret_cast<uint64_t*>(out_row + x * 16);
+          dst[0] = src[0];
+          dst[1] = src[1];
+        }
+        output_row_offset += output_pitch;
+      }
+      return;
+    } else if (output_bytes_per_block == 4) { // RGBA8 / 32-bit colors
+      uint32_t output_row_offset = start_y * output_pitch;
+      for (uint32_t y = start_y; y < end_y; ++y) {
+        uint32_t actual_y = untile_info->offset_y + y;
+        uint32_t input_row_offset = TiledOffset2DRow(actual_y, untile_info->input_pitch, 2);
+        uint8_t* __restrict out_row = output_buffer + output_row_offset;
+        uint32_t off_x = untile_info->offset_x;
+
+        for (uint32_t x = 0; x < untile_info->width; ++x) {
+          uint32_t in_offset = TiledOffset2DColumn(off_x + x, actual_y, 2, input_row_offset) & ~3u;
+          *reinterpret_cast<uint32_t*>(out_row + x * 4) =
+              *reinterpret_cast<const uint32_t*>(input_buffer + in_offset);
+        }
+        output_row_offset += output_pitch;
+      }
+      return;
+    }
+  }
+
+  // Fast-path: CTX1 to R8G8 decoding
+  if (untile_info->input_format_info->format == xenos::TextureFormat::k_CTX1 &&
+      untile_info->output_format_info->format == xenos::TextureFormat::k_8_8) {
+    uint32_t out_pitch_bytes = untile_info->output_pitch * 2;
+    for (uint32_t by = start_y; by < end_y; ++by) {
+      uint32_t actual_y = untile_info->offset_y + by;
+      uint32_t input_row_offset = TiledOffset2DRow(actual_y, untile_info->input_pitch, 3);
+      uint32_t off_x = untile_info->offset_x;
+
+      for (uint32_t bx = 0; bx < untile_info->width; ++bx) {
+        uint32_t in_offset = TiledOffset2DColumn(off_x + bx, actual_y, 3, input_row_offset) & ~7u;
+        const uint8_t* src_blk = input_buffer + in_offset;
+        uint8_t g0 = src_blk[0];
+        uint8_t r0 = src_blk[1];
+        uint8_t g1 = src_blk[2];
+        uint8_t r1 = src_blk[3];
+        uint32_t xx = *reinterpret_cast<const uint32_t*>(src_blk + 4);
+
+        uint8_t cr[4] = {r0, r1,
+                         static_cast<uint8_t>(((2 * r0 + r1) * 85 + 128) >> 8),
+                         static_cast<uint8_t>(((r0 + 2 * r1) * 85 + 128) >> 8)};
+        uint8_t cg[4] = {g0, g1,
+                         static_cast<uint8_t>(((2 * g0 + g1) * 85 + 128) >> 8),
+                         static_cast<uint8_t>(((g0 + 2 * g1) * 85 + 128) >> 8)};
+
+        for (uint32_t oy = 0; oy < 4; ++oy) {
+          uint32_t row_shift = oy * 8;
+          uint8_t* dst_px = output_buffer + (by * 4 + oy) * out_pitch_bytes + (bx * 4 * 2);
+          uint16_t* dst16 = reinterpret_cast<uint16_t*>(dst_px);
+          dst16[0] = static_cast<uint16_t>(cr[(xx >> (row_shift + 0)) & 3] | (cg[(xx >> (row_shift + 0)) & 3] << 8));
+          dst16[1] = static_cast<uint16_t>(cr[(xx >> (row_shift + 2)) & 3] | (cg[(xx >> (row_shift + 2)) & 3] << 8));
+          dst16[2] = static_cast<uint16_t>(cr[(xx >> (row_shift + 4)) & 3] | (cg[(xx >> (row_shift + 4)) & 3] << 8));
+          dst16[3] = static_cast<uint16_t>(cr[(xx >> (row_shift + 6)) & 3] | (cg[(xx >> (row_shift + 6)) & 3] << 8));
+        }
+      }
+    }
+    return;
+  }
+
+  // Generic fallback path with format conversion callback
+  uint32_t output_row_offset = start_y * output_pitch;
+  for (uint32_t y = start_y; y < end_y; ++y) {
     auto input_row_offset =
         TiledOffset2DRow(untile_info->offset_y + y, untile_info->input_pitch, log2_bpp);
 
-    // Go block-by-block on this row.
     uint32_t output_offset = output_row_offset;
-
-    for (uint32_t x = 0; x < untile_info->width; x++) {
+    for (uint32_t x = 0; x < untile_info->width; ++x) {
       auto input_offset = TiledOffset2DColumn(untile_info->offset_x + x, untile_info->offset_y + y,
                                               log2_bpp, input_row_offset);
       input_offset >>= log2_bpp;
@@ -138,6 +344,17 @@ void Untile(uint8_t* output_buffer, const uint8_t* input_buffer, const UntileInf
 
     output_row_offset += output_pitch;
   }
+}
+
+void Untile(uint8_t* output_buffer, const uint8_t* input_buffer, const UntileInfo* untile_info) {
+  SCOPE_profile_cpu_f("gpu");
+  assert_not_null(untile_info);
+  assert_not_null(untile_info->input_format_info);
+  assert_not_null(untile_info->output_format_info);
+
+  UntileWorkerPool::Instance().ParallelFor(untile_info->height, [&](uint32_t start_y, uint32_t end_y) {
+    UntileRowRange(output_buffer, input_buffer, untile_info, start_y, end_y);
+  });
 }
 
 }  // namespace rex::graphics::texture_conversion

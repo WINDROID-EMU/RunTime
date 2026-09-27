@@ -8,10 +8,13 @@
 
 #include <rex/platform/android/android_bridge.h>
 #include <rex/logging.h>
+#include <rex/ui/window_android.h>
+#include <rex/input/android/android_input_driver.h>
 
 namespace rex::platform::android {
 
 static rex::ui::WindowAndroid* active_window_ = nullptr;
+static ANativeWindow* active_native_window_ = nullptr;
 
 void AndroidBridge::SetActiveWindow(rex::ui::WindowAndroid* window) {
   active_window_ = window;
@@ -21,13 +24,29 @@ rex::ui::WindowAndroid* AndroidBridge::GetActiveWindow() {
   return active_window_;
 }
 
+void AndroidBridge::SetNativeWindow(ANativeWindow* window) {
+  active_native_window_ = window;
+}
+
+ANativeWindow* AndroidBridge::GetNativeWindow() {
+  if (active_native_window_) {
+    return active_native_window_;
+  }
+  if (active_window_) {
+    return active_window_->GetNativeWindow();
+  }
+  return nullptr;
+}
+
 void AndroidBridge::OnSurfaceCreated(ANativeWindow* native_window) {
+  active_native_window_ = native_window;
   if (active_window_) {
     active_window_->SetNativeWindow(native_window);
   }
 }
 
 void AndroidBridge::OnSurfaceDestroyed() {
+  active_native_window_ = nullptr;
   if (active_window_) {
     active_window_->SetNativeWindow(nullptr);
   }
@@ -35,6 +54,7 @@ void AndroidBridge::OnSurfaceDestroyed() {
 
 void AndroidBridge::OnSurfaceChanged(ANativeWindow* native_window, [[maybe_unused]] int width,
                                     [[maybe_unused]] int height) {
+  active_native_window_ = native_window;
   if (active_window_) {
     active_window_->SetNativeWindow(native_window);
   }

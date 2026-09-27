@@ -231,6 +231,11 @@ void Shader::AnalyzeUcode(string::StringBuffer& ucode_disasm_buffer) {
           uint32_t successor_cf_index = successor_stack.back();
           successor_stack.pop_back();
 
+          if (successor_cf_index >= cf_memexport_info_.size() ||
+              (successor_cf_index >> 1) * 3 + 3 > ucode_data_.size()) {
+            continue;
+          }
+
           ControlFlowMemExportInfo& successor_memexport_info =
               cf_memexport_info_[successor_cf_index];
           if ((successor_memexport_info.eM_potentially_written_before & eM_written_by_cf_instr) ==
@@ -347,6 +352,10 @@ void Shader::GatherExecInformation(const ParsedExecInstruction& instr,
   for (uint32_t instr_offset = instr.instruction_address;
        instr_offset < instr.instruction_address + instr.instruction_count;
        ++instr_offset, sequence >>= 2) {
+    if ((instr_offset + 1) * 3 > ucode_data_.size()) {
+      ucode_disasm_buffer.AppendFormat("/* {:4d}   */ <instruction offset out of bounds>\n", instr_offset);
+      break;
+    }
     ucode_disasm_buffer.AppendFormat("/* {:4d}   */ ", instr_offset);
     if (sequence & 0b10) {
       ucode_disasm_buffer.Append("         serialize\n             ");
@@ -886,6 +895,9 @@ void ShaderTranslator::TranslateExecInstructions(const ParsedExecInstruction& in
   for (uint32_t instr_offset = instr.instruction_address;
        instr_offset < instr.instruction_address + instr.instruction_count;
        ++instr_offset, sequence >>= 2) {
+    if ((instr_offset + 1) * 3 > current_shader().ucode_data().size()) {
+      break;
+    }
     const uint32_t* op_ptr = ucode_dwords + instr_offset * 3;
     if (sequence & 0b01) {
       auto& op = *reinterpret_cast<const FetchInstruction*>(op_ptr);
@@ -1017,19 +1029,23 @@ void ParseTextureFetchInstruction(const TextureFetchInstruction& op,
     bool has_attributes;
     uint32_t override_component_count;
   } opcode_info;
+  auto get_dim_idx = [](xenos::FetchOpDimension dim) -> int {
+    int idx = static_cast<int>(dim);
+    return (idx >= 0 && idx < 4) ? idx : 0;
+  };
   switch (op.opcode()) {
     case FetchOpcode::kTextureFetch: {
       static const char* kNames[] = {"tfetch1D", "tfetch2D", "tfetch3D", "tfetchCube"};
-      opcode_info = {kNames[static_cast<int>(op.dimension())], true, true, true, 0};
+      opcode_info = {kNames[get_dim_idx(op.dimension())], true, true, true, 0};
     } break;
     case FetchOpcode::kGetTextureBorderColorFrac: {
       static const char* kNames[] = {"getBCF1D", "getBCF2D", "getBCF3D", "getBCFCube"};
-      opcode_info = {kNames[static_cast<int>(op.dimension())], true, true, true, 0};
+      opcode_info = {kNames[get_dim_idx(op.dimension())], true, true, true, 0};
     } break;
     case FetchOpcode::kGetTextureComputedLod: {
       static const char* kNames[] = {"getCompTexLOD1D", "getCompTexLOD2D", "getCompTexLOD3D",
                                      "getCompTexLODCube"};
-      opcode_info = {kNames[static_cast<int>(op.dimension())], true, true, true, 0};
+      opcode_info = {kNames[get_dim_idx(op.dimension())], true, true, true, 0};
     } break;
     case FetchOpcode::kGetTextureGradients:
       opcode_info = {"getGradients", true, true, true, 2};
@@ -1037,7 +1053,7 @@ void ParseTextureFetchInstruction(const TextureFetchInstruction& op,
     case FetchOpcode::kGetTextureWeights: {
       static const char* kNames[] = {"getWeights1D", "getWeights2D", "getWeights3D",
                                      "getWeightsCube"};
-      opcode_info = {kNames[static_cast<int>(op.dimension())], true, true, true, 0};
+      opcode_info = {kNames[get_dim_idx(op.dimension())], true, true, true, 0};
     } break;
     case FetchOpcode::kSetTextureLod:
       opcode_info = {"setTexLOD", false, false, false, 1};
@@ -1049,8 +1065,9 @@ void ParseTextureFetchInstruction(const TextureFetchInstruction& op,
       opcode_info = {"setGradientV", false, false, false, 3};
       break;
     default:
-      assert_unhandled_case(fetch_opcode);
-      return;
+      assert_unhandled_case(op.opcode());
+      opcode_info = {"tfetch_unknown", false, false, false, 0};
+      break;
   }
 
   instr.opcode = op.opcode();

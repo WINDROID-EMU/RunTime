@@ -353,7 +353,7 @@ bool PacketDisassembler::DisasmPacketType3(const uint8_t* base_ptr, uint32_t pac
       static const PacketTypeInfo op_info = {PacketCategory::kGeneric, "PM4_IM_LOAD"};
       out_info->type_info = &op_info;
       uint32_t addr_type = memory::load_and_swap<uint32_t>(ptr + 0);
-      auto shader_type = static_cast<xenos::ShaderType>(addr_type & 0x3);
+      auto shader_type = (addr_type & 1) ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel;
       uint32_t addr = addr_type & ~0x3;
       uint32_t start_size = memory::load_and_swap<uint32_t>(ptr + 4);
       uint32_t start = start_size >> 16;
@@ -367,7 +367,7 @@ bool PacketDisassembler::DisasmPacketType3(const uint8_t* base_ptr, uint32_t pac
       out_info->type_info = &op_info;
       uint32_t dword0 = memory::load_and_swap<uint32_t>(ptr + 0);
       uint32_t dword1 = memory::load_and_swap<uint32_t>(ptr + 4);
-      auto shader_type = static_cast<xenos::ShaderType>(dword0);
+      auto shader_type = (dword0 & 1) ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel;
       uint32_t start_size = dword1;
       uint32_t start = start_size >> 16;
       uint32_t size_dwords = start_size & 0xFFFF;  // dwords

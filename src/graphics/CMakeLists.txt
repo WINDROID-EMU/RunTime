@@ -27,6 +27,7 @@ set(REXGPU_XENOS_SOURCES
     shared_memory.cpp
     pipeline/texture/cache.cpp
     pipeline/shader/interpreter.cpp
+    pipeline/shader/prebaked_shader_cache.cpp
     pipeline/shader/translator.cpp
     pipeline/shader/translator_disasm.cpp
 )

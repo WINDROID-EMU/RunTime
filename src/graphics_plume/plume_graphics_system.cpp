@@ -11,8 +11,10 @@
 #include <rex/ui/presenter.h>
 #include <rex/ui/windowed_app_context.h>
 #if defined(__ANDROID__)
+#include <android/log.h>
 #include <rex/ui/windowed_app_context_android.h>
 #include <rex/ui/window_android.h>
+#include <rex/platform/android/android_bridge.h>
 #endif
 
 #include <plume_render_interface.h>
@@ -33,6 +35,7 @@ PlumeGraphicsSystem::~PlumeGraphicsSystem() {
 
 X_STATUS PlumeGraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_context) {
   REXLOG_INFO("PlumeGraphicsSystem::SetupPresentation");
+  app_context_ = app_context;
 
   if (!plume_interface_) {
     plume_interface_ = ::plume::CreateVulkanInterface();
@@ -49,31 +52,53 @@ X_STATUS PlumeGraphicsSystem::SetupPresentation(ui::WindowedAppContext* app_cont
     }
     REXLOG_INFO("PlumeGraphicsSystem: Vulkan RenderDevice created successfully (name: '{}')",
                 plume_device_->getDescription().name);
-
-#if defined(__ANDROID__)
-    if (app_context) {
-      auto* android_app = dynamic_cast<ui::AndroidWindowedAppContext*>(app_context);
-      if (android_app && android_app->GetWindow()) {
-        ANativeWindow* native_win = android_app->GetWindow()->GetNativeWindow();
-        if (native_win) {
-          ::plume::RenderSwapChainDesc swap_desc(
-              native_win,
-              ::plume::RenderFormat::R8G8B8A8_UNORM,
-              3
-          );
-          auto q = plume_device_->createCommandQueue(::plume::RenderCommandListType::DIRECT);
-          if (q) {
-            plume_swapchain_ = q->createSwapChain(swap_desc);
-            REXLOG_INFO("PlumeGraphicsSystem: SwapChain created for ANativeWindow ({}x{})",
-                        ANativeWindow_getWidth(native_win), ANativeWindow_getHeight(native_win));
-          }
-        }
-      }
-    }
-#endif
   }
 
   return X_STATUS_SUCCESS;
+}
+
+::plume::RenderSwapChain* PlumeGraphicsSystem::plume_swapchain() {
+  if (plume_swapchain_) {
+    return plume_swapchain_.get();
+  }
+
+#if defined(__ANDROID__)
+  ANativeWindow* native_win = rex::platform::android::AndroidBridge::GetNativeWindow();
+  if (!native_win && app_context_) {
+    auto* android_app = static_cast<ui::AndroidWindowedAppContext*>(app_context_);
+    auto* win = android_app ? android_app->GetWindow() : nullptr;
+    if (win) {
+      native_win = win->GetNativeWindow();
+    }
+  }
+  static uint32_t check_count = 0;
+  if ((++check_count % 60) == 1) {
+    __android_log_print(ANDROID_LOG_INFO, "PlumeDebug",
+                        "plume_swapchain #%u: native_win=%p plume_dev=%p",
+                        check_count, native_win, plume_device_.get());
+  }
+  if (native_win && plume_device_) {
+    ::plume::RenderSwapChainDesc swap_desc(
+        native_win,
+        ::plume::RenderFormat::R8G8B8A8_UNORM,
+        3
+    );
+    if (!plume_queue_) {
+      plume_queue_ = plume_device_->createCommandQueue(::plume::RenderCommandListType::DIRECT);
+    }
+    if (plume_queue_) {
+      plume_swapchain_ = plume_queue_->createSwapChain(swap_desc);
+      bool resized = plume_swapchain_ ? plume_swapchain_->resize() : false;
+      __android_log_print(ANDROID_LOG_INFO, "PlumeDebug",
+                          "PlumeGraphicsSystem: SwapChain created and resized=%d for ANativeWindow (%dx%d)",
+                          resized, ANativeWindow_getWidth(native_win), ANativeWindow_getHeight(native_win));
+    } else {
+      __android_log_print(ANDROID_LOG_ERROR, "PlumeDebug", "PlumeGraphicsSystem: Failed to create queue for swapchain");
+    }
+  }
+#endif
+
+  return plume_swapchain_.get();
 }
 
 void PlumeGraphicsSystem::CreateProvider(bool with_presentation) {
@@ -86,10 +111,11 @@ std::unique_ptr<rex::graphics::CommandProcessor> PlumeGraphicsSystem::CreateComm
 }
 
 void PlumeGraphicsSystem::Present() {
-  if (plume_swapchain_) {
+  auto* sc = plume_swapchain();
+  if (sc) {
     uint32_t texture_index = 0;
-    if (plume_swapchain_->acquireTexture(nullptr, &texture_index)) {
-      plume_swapchain_->present(texture_index, nullptr, 0);
+    if (sc->acquireTexture(nullptr, &texture_index)) {
+      sc->present(texture_index, nullptr, 0);
     }
   }
 }
@@ -97,6 +123,7 @@ void PlumeGraphicsSystem::Present() {
 void PlumeGraphicsSystem::Shutdown() {
   REXLOG_INFO("PlumeGraphicsSystem::Shutdown");
   plume_swapchain_.reset();
+  plume_queue_.reset();
   plume_device_.reset();
   plume_interface_.reset();
   rex::graphics::GraphicsSystem::Shutdown();

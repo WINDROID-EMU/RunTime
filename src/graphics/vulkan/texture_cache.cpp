@@ -1236,16 +1236,6 @@ bool VulkanTextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture,
   VulkanTexture& vulkan_texture = static_cast<VulkanTexture&>(texture);
   TextureKey texture_key = vulkan_texture.key();
 
-  // ==========================================
-  // NFSMW Recomp: Direct ASTC Texture Bypass
-  // ==========================================
-  // Bypasses the costly host shader conversion if we're supplying native ASTC/BCn offline.
-  // In a full implementation, we load the ASTC raw buffer here from our VFS/resources.
-  // For now, we simulate success to avoid the pipeline conversion crash/stutter.
-  // TODO: Map 'texture_key' to ASTC file and load to 'vulkan_texture'.
-  return true;
-  // ==========================================
-
   // Get the pipeline.
   const HostFormatPair& host_format_pair = GetHostFormatPair(texture_key);
   bool host_format_is_signed;
@@ -2949,6 +2939,10 @@ bool VulkanTextureCache::Initialize() {
                        sizeof(shaders::texture_load_depth_float_scaled_cs));
   }
 
+  VkPipelineCache hw_cache = command_processor_.pipeline_cache()
+                                 ? command_processor_.pipeline_cache()->hardware_pipeline_cache()
+                                 : VK_NULL_HANDLE;
+
   for (size_t i = 0; i < kLoadShaderCount; ++i) {
     if (!load_shaders_needed[i]) {
       continue;
@@ -2957,7 +2951,7 @@ bool VulkanTextureCache::Initialize() {
     assert_not_null(current_load_shader_code.first);
     load_pipelines_[i] = ui::vulkan::util::CreateComputePipeline(
         vulkan_device, load_pipeline_layout_, current_load_shader_code.first,
-        current_load_shader_code.second);
+        current_load_shader_code.second, nullptr, "main", hw_cache);
     if (load_pipelines_[i] == VK_NULL_HANDLE) {
       REXGPU_ERROR(
           "VulkanTextureCache: Failed to create the texture loading pipeline "
@@ -2971,7 +2965,7 @@ bool VulkanTextureCache::Initialize() {
       if (current_load_shader_code_scaled.first) {
         load_pipelines_scaled_[i] = ui::vulkan::util::CreateComputePipeline(
             vulkan_device, load_pipeline_layout_, current_load_shader_code_scaled.first,
-            current_load_shader_code_scaled.second);
+            current_load_shader_code_scaled.second, nullptr, "main", hw_cache);
         if (load_pipelines_scaled_[i] == VK_NULL_HANDLE) {
           REXGPU_ERROR(
               "VulkanTextureCache: Failed to create the resolution-scaled "
