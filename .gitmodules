@@ -64,7 +64,7 @@
 	url = https://github.com/wolfpld/tracy.git
 [submodule "thirdparty/plume"]
 	path = thirdparty/plume
-	url = https://github.com/renderbag/plume.git
+	url = https://github.com/WINDROID-EMU/plume.git
 [submodule "tools/XenosRecomp"]
 	path = tools/XenosRecomp
 	url = https://github.com/hedge-dev/XenosRecomp.git
