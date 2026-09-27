@@ -974,6 +974,10 @@ bool VulkanCommandProcessor::SetupContext() {
   // Requires the transient descriptor set layouts.
   render_target_cache_ = std::make_unique<VulkanRenderTargetCache>(
       *register_file_, *memory_, draw_resolution_scale_x, draw_resolution_scale_y, *this);
+  if (!render_target_cache_->Initialize(shared_memory_binding_count)) {
+    REXGPU_ERROR("Failed to initialize the render target cache");
+    return false;
+  }
 
   // Shared memory and EDRAM descriptor set layout.
   bool edram_fragment_shader_interlock =
@@ -1019,11 +1023,6 @@ bool VulkanCommandProcessor::SetupContext() {
       *this, *register_file_, *render_target_cache_, guest_shader_vertex_stages_);
   if (!pipeline_cache_->Initialize()) {
     REXGPU_ERROR("Failed to initialize the graphics pipeline cache");
-    return false;
-  }
-
-  if (!render_target_cache_->Initialize(shared_memory_binding_count)) {
-    REXGPU_ERROR("Failed to initialize the render target cache");
     return false;
   }
 

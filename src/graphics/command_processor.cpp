@@ -1582,9 +1582,8 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD(memory::RingBuffer* reader, ui
   SCOPE_profile_cpu_f("gpu");
 
   // load sequencer instruction memory (pointer-based)
-  // PM4 hardware convention: bit 0 is 1 for Vertex Shader, 0 for Pixel Shader.
   uint32_t addr_type = reader->ReadAndSwap<uint32_t>();
-  auto shader_type = (addr_type & 1) ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel;
+  auto shader_type = static_cast<xenos::ShaderType>(addr_type & 0x3);
   uint32_t addr = addr_type & ~0x3;
   uint32_t start_size = reader->ReadAndSwap<uint32_t>();
   uint32_t start = start_size >> 16;
@@ -1613,10 +1612,9 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD_IMMEDIATE(memory::RingBuffer* 
   SCOPE_profile_cpu_f("gpu");
 
   // load sequencer instruction memory (code embedded in packet)
-  // PM4 hardware convention: bit 0 is 1 for Vertex Shader, 0 for Pixel Shader.
   uint32_t dword0 = reader->ReadAndSwap<uint32_t>();
   uint32_t dword1 = reader->ReadAndSwap<uint32_t>();
-  auto shader_type = (dword0 & 1) ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel;
+  auto shader_type = static_cast<xenos::ShaderType>(dword0);
   uint32_t start_size = dword1;
   uint32_t start = start_size >> 16;
   uint32_t size_dwords = start_size & 0xFFFF;  // dwords

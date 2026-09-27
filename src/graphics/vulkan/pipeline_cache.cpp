@@ -474,9 +474,18 @@ void VulkanPipelineCache::LoadHardwarePipelineCache(const std::filesystem::path&
   }
 }
 
-void VulkanPipelineCache::SaveHardwarePipelineCache() {
+void VulkanPipelineCache::SaveHardwarePipelineCache(bool force) {
   if (hardware_pipeline_cache_ == VK_NULL_HANDLE || hardware_pipeline_cache_file_path_.empty()) {
     return;
+  }
+
+  if (!force) {
+    static auto last_save = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - last_save).count() < 15) {
+      return;
+    }
+    last_save = now;
   }
 
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
@@ -508,7 +517,7 @@ void VulkanPipelineCache::SaveAndDestroyHardwarePipelineCache() {
     return;
   }
 
-  SaveHardwarePipelineCache();
+  SaveHardwarePipelineCache(true);
 
   const ui::vulkan::VulkanDevice* const vulkan_device = command_processor_.GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
@@ -1426,18 +1435,11 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
                                                   VulkanShader::VulkanTranslation& translation) {
   VulkanShader& shader = static_cast<VulkanShader&>(translation.shader());
 
-  // Check AOT prebaked shader cache first!
-  const auto* prebaked = rex::graphics::PrebakedShaderCache::Get().FindShader(shader.ucode_data_hash());
-  if (prebaked && !prebaked->spirv_binary.empty()) {
-    translation.SetPrebakedBinary(prebaked->spirv_binary);
-    shader.SetBindingsFromCache(prebaked->texture_bindings, prebaked->sampler_bindings);
-  } else {
-    // Perform translation on-the-fly.
-    // If this fails the shader will be marked as invalid and ignored later.
-    if (!translator.TranslateAnalyzedShader(translation)) {
-      REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
-      return false;
-    }
+  // Perform translation on-the-fly with the exact modification required.
+  // If this fails the shader will be marked as invalid and ignored later.
+  if (!translator.TranslateAnalyzedShader(translation)) {
+    REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
+    return false;
   }
   if (translation.GetOrCreateShaderModule() == VK_NULL_HANDLE) {
     return false;

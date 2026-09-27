@@ -227,62 +227,7 @@ static void UntileRowRange(uint8_t* output_buffer, const uint8_t* input_buffer,
   auto log2_bpp =
       (input_bytes_per_block / 4) + ((input_bytes_per_block / 2) >> (input_bytes_per_block / 4));
 
-  bool is_direct_copy = (untile_info->input_format_info == untile_info->output_format_info);
 
-  // Fast-path: Direct vectorized copy without callback overhead
-  if (is_direct_copy) {
-    if (output_bytes_per_block == 8) { // DXT1 / BC1 (64-bit blocks)
-      uint32_t output_row_offset = start_y * output_pitch;
-      for (uint32_t y = start_y; y < end_y; ++y) {
-        uint32_t actual_y = untile_info->offset_y + y;
-        uint32_t input_row_offset = TiledOffset2DRow(actual_y, untile_info->input_pitch, 3);
-        uint8_t* __restrict out_row = output_buffer + output_row_offset;
-        uint32_t off_x = untile_info->offset_x;
-
-        for (uint32_t x = 0; x < untile_info->width; ++x) {
-          uint32_t in_offset = TiledOffset2DColumn(off_x + x, actual_y, 3, input_row_offset) & ~7u;
-          *reinterpret_cast<uint64_t*>(out_row + x * 8) =
-              *reinterpret_cast<const uint64_t*>(input_buffer + in_offset);
-        }
-        output_row_offset += output_pitch;
-      }
-      return;
-    } else if (output_bytes_per_block == 16) { // DXT3, DXT5 / BC2, BC3 (128-bit blocks)
-      uint32_t output_row_offset = start_y * output_pitch;
-      for (uint32_t y = start_y; y < end_y; ++y) {
-        uint32_t actual_y = untile_info->offset_y + y;
-        uint32_t input_row_offset = TiledOffset2DRow(actual_y, untile_info->input_pitch, 4);
-        uint8_t* __restrict out_row = output_buffer + output_row_offset;
-        uint32_t off_x = untile_info->offset_x;
-
-        for (uint32_t x = 0; x < untile_info->width; ++x) {
-          uint32_t in_offset = TiledOffset2DColumn(off_x + x, actual_y, 4, input_row_offset) & ~15u;
-          const uint64_t* __restrict src = reinterpret_cast<const uint64_t*>(input_buffer + in_offset);
-          uint64_t* __restrict dst = reinterpret_cast<uint64_t*>(out_row + x * 16);
-          dst[0] = src[0];
-          dst[1] = src[1];
-        }
-        output_row_offset += output_pitch;
-      }
-      return;
-    } else if (output_bytes_per_block == 4) { // RGBA8 / 32-bit colors
-      uint32_t output_row_offset = start_y * output_pitch;
-      for (uint32_t y = start_y; y < end_y; ++y) {
-        uint32_t actual_y = untile_info->offset_y + y;
-        uint32_t input_row_offset = TiledOffset2DRow(actual_y, untile_info->input_pitch, 2);
-        uint8_t* __restrict out_row = output_buffer + output_row_offset;
-        uint32_t off_x = untile_info->offset_x;
-
-        for (uint32_t x = 0; x < untile_info->width; ++x) {
-          uint32_t in_offset = TiledOffset2DColumn(off_x + x, actual_y, 2, input_row_offset) & ~3u;
-          *reinterpret_cast<uint32_t*>(out_row + x * 4) =
-              *reinterpret_cast<const uint32_t*>(input_buffer + in_offset);
-        }
-        output_row_offset += output_pitch;
-      }
-      return;
-    }
-  }
 
   // Fast-path: CTX1 to R8G8 decoding
   if (untile_info->input_format_info->format == xenos::TextureFormat::k_CTX1 &&
