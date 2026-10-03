@@ -17,9 +17,13 @@ permissions:
   contents: write
   actions: write
 
+concurrency:
+  group: build-android-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-android-arm64:
-    name: Build Android ARM64
+    name: Build Android ARM64 SDK
     runs-on: ubuntu-latest
 
     steps:
@@ -95,13 +99,13 @@ jobs:
 
           short_sha=$(git rev-parse --short HEAD)
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            tag_name="${GITHUB_REF_NAME}"
-            release_title="Release ${tag_name}"
+            tag_name="${GITHUB_REF_NAME}-sdk"
+            release_title="SDK Release ${GITHUB_REF_NAME}"
             is_prerelease="false"
           else
-            tag_name="v${floor_v}-${short_sha}"
-            release_title="Release v${floor_v} (${short_sha})"
-            is_prerelease="false"
+            tag_name="v${floor_v}-${short_sha}-sdk"
+            release_title="SDK Build v${floor_v} (${short_sha})"
+            is_prerelease="true"
           fi
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "release_title=${release_title}" >> "$GITHUB_OUTPUT"
@@ -129,6 +133,6 @@ jobs:
           files: out/install/rexglue-sdk-*-android-arm64.zip
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.is_prerelease == 'true' }}
-          make_latest: true
+          make_latest: ${{ steps.version.outputs.is_prerelease != 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -25,7 +25,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-android-${{ github.ref }}
+  group: release-android-app-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -64,20 +64,20 @@ jobs:
         run: |
           short_sha=$(git rev-parse --short HEAD)
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.custom_tag }}" ]]; then
-            tag_name="${{ inputs.custom_tag }}"
-            version="${tag_name#v}"
+            tag_name="${{ inputs.custom_tag }}-app"
+            version="${{ inputs.custom_tag }#v}"
             is_prerelease="${{ inputs.prerelease }}"
-            release_title="Release ${tag_name}"
+            release_title="App Release ${{ inputs.custom_tag }}"
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            tag_name="${GITHUB_REF_NAME}"
-            version="${tag_name#v}"
+            tag_name="${GITHUB_REF_NAME}-app"
+            version="${GITHUB_REF_NAME#v}"
             is_prerelease="false"
-            release_title="Release ${tag_name}"
+            release_title="App Release ${GITHUB_REF_NAME}"
           else
             version="0.10.0-nightly-${short_sha}"
-            tag_name="v0.10.0-${short_sha}"
+            tag_name="v0.10.0-${short_sha}-app"
             is_prerelease="true"
-            release_title="Nightly Build (${short_sha})"
+            release_title="App Nightly Build (${short_sha})"
           fi
 
           echo "VERSION=${version}" >> "$GITHUB_OUTPUT"
