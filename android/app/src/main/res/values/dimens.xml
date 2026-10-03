@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spacing & Padding -->
+    <dimen name="spacing_micro">4dp</dimen>
+    <dimen name="spacing_small">8dp</dimen>
+    <dimen name="spacing_medium">16dp</dimen>
+    <dimen name="spacing_large">24dp</dimen>
+    <dimen name="spacing_xlarge">32dp</dimen>
+
+    <!-- Card & Grid -->
+    <dimen name="game_card_corner_radius">12dp</dimen>
+    <dimen name="game_card_elevation">4dp</dimen>
+    <dimen name="game_card_cover_height">160dp</dimen>
+    <dimen name="game_grid_spacing">12dp</dimen>
+
+    <!-- Typography -->
+    <dimen name="text_size_title">16sp</dimen>
+    <dimen name="text_size_subtitle">12sp</dimen>
+    <dimen name="text_size_fps">14sp</dimen>
+
+    <!-- In-Game UI -->
+    <dimen name="fps_counter_padding_h">10dp</dimen>
+    <dimen name="fps_counter_padding_v">6dp</dimen>
+    <dimen name="fps_counter_corner_radius">6dp</dimen>
+</resources>

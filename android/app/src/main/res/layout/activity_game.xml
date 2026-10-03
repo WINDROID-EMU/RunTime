@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/game_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:keepScreenOn="true">
+
+    <!-- Vulkan Rendering Surface -->
+    <com.rexglue.runtime.GameSurfaceView
+        android:id="@+id/game_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Virtual Xbox Touch Controller Overlay -->
+    <com.rexglue.runtime.VirtualControllerView
+        android:id="@+id/controller_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Real-time FPS & Performance Overlay -->
+    <TextView
+        android:id="@+id/fps_counter"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="@dimen/spacing_medium"
+        android:background="@color/fps_counter_bg"
+        android:fontFamily="monospace"
+        android:paddingStart="@dimen/fps_counter_padding_h"
+        android:paddingTop="@dimen/fps_counter_padding_v"
+        android:paddingEnd="@dimen/fps_counter_padding_h"
+        android:paddingBottom="@dimen/fps_counter_padding_v"
+        android:textColor="@color/brand_green_bright"
+        android:textSize="@dimen/text_size_fps"
+        android:textStyle="bold"
+        tools:text="60 FPS" />
+
+</FrameLayout>

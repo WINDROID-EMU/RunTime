@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App & General -->
+    <string name="app_name">ReXGlue</string>
+    <string name="app_description">Next-gen static recompilation runtime for Android</string>
+    <string name="app_version_label">Version %s</string>
+    <string name="exit">Exit</string>
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+
+    <!-- Errors & Alerts -->
+    <string name="error_title">Initialization Error</string>
+    <string name="error_native_libs">Failed to load native C++ runtime libraries (librexglue_jni.so / librexruntime.so). Please verify device compatibility (arm64-v8a required).</string>
+    <string name="error_init_failed">Failed to initialize native ReXGlue runtime environment.</string>
+    <string name="error_no_module">No executable game module specified.</string>
+    <string name="error_load_failed">Failed to load game module into memory.</string>
+    <string name="storage_permission_denied">Storage access is required to scan and load game files.</string>
+
+    <!-- Welcome & First Run -->
+    <string name="welcome_title">Welcome to ReXGlue</string>
+    <string name="welcome_message">Select the directory containing your recompiled game modules and asset files to begin playing.</string>
+    <string name="select_folder">Select Folder</string>
+    <string name="change_folder">Change Game Directory</string>
+
+    <!-- Game List -->
+    <string name="empty_games_title">No Games Found</string>
+    <string name="empty_games_description">Add recompiled game modules (*.so) to your game folder to see them here.</string>
+    <string name="never_played">Never played</string>
+    <string name="played_hours">Played %s hrs</string>
+    <string name="played_minutes">Played %s min</string>
+    <string name="game_option_play">Launch Game</string>
+    <string name="game_option_settings">Game Settings</string>
+    <string name="game_option_delete_cache">Clear Shader Cache</string>
+    <string name="cache_cleared">Shader cache cleared successfully.</string>
+
+    <!-- In-Game -->
+    <string name="exit_game_title">Exit Game?</string>
+    <string name="exit_game_message">Are you sure you want to stop playing %s? Unsaved progress may be lost.</string>
+    <string name="fps_label">FPS: %d</string>
+
+    <!-- Menu -->
+    <string name="menu_refresh">Refresh Library</string>
+    <string name="menu_change_folder">Change Folder</string>
+    <string name="menu_settings">Settings</string>
+
+    <!-- Settings - Categories -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_cat_graphics">Graphics &amp; Display</string>
+    <string name="settings_cat_audio">Audio</string>
+    <string name="settings_cat_controls">Input &amp; Controls</string>
+    <string name="settings_cat_system">System &amp; Storage</string>
+
+    <!-- Settings - Graphics -->
+    <string name="settings_resolution">Internal Resolution</string>
+    <string name="settings_resolution_summary">Render resolution multiplier (higher requires powerful GPU)</string>
+    <string name="settings_vsync">V-Sync (Vertical Synchronization)</string>
+    <string name="settings_vsync_summary">Prevent screen tearing by syncing frames with display refresh rate</string>
+    <string name="settings_fidelityfx">AMD FidelityFX Super Resolution (FSR)</string>
+    <string name="settings_fidelityfx_summary">Spatial upscaling with sharpening for optimal visual clarity</string>
+    <string name="settings_fps_counter">Show FPS Counter</string>
+    <string name="settings_fps_counter_summary">Display real-time frame rate overlay during gameplay</string>
+
+    <!-- Settings - Audio -->
+    <string name="settings_audio_latency">AAudio Latency Mode</string>
+    <string name="settings_audio_latency_summary">Configure audio buffer depth and latency</string>
+    <string name="settings_audio_enabled">Enable Audio Output</string>
+
+    <!-- Settings - Controls -->
+    <string name="settings_show_touch">Virtual Touch Controller</string>
+    <string name="settings_show_touch_summary">Show on-screen touch controls for touchscreen gameplay</string>
+    <string name="settings_ctrl_opacity">Touch Overlay Opacity</string>
+    <string name="settings_haptic">Haptic Feedback</string>
+    <string name="settings_haptic_summary">Vibrate device on virtual controller button presses</string>
+
+    <!-- Settings - System -->
+    <string name="settings_game_folder">Game Files Directory</string>
+    <string name="settings_game_folder_not_set">Not configured</string>
+    <string name="settings_clear_shaders">Clear Compiled Shaders</string>
+    <string name="settings_clear_shaders_summary">Cached shaders: %s</string>
+    <string name="settings_version">Runtime Engine Version</string>
+
+    <!-- Service Notification -->
+    <string name="service_compiling_shaders">ReXGlue Shader Precompiler</string>
+    <string name="service_compiling_description">Precompiling Vulkan graphics pipeline cache...</string>
+</resources>

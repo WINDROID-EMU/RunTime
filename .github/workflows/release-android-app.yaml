@@ -1,0 +1,162 @@
+name: Release Android App
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        default: false
+        type: boolean
+      custom_tag:
+        description: "Custom tag name (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-release-apk:
+    name: Build & Publish Release APK / AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Java 21 (JDK)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Android NDK (r27c)
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Determine Version
+        id: version
+        shell: bash
+        run: |
+          short_sha=$(git rev-parse --short HEAD)
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.custom_tag }}" ]]; then
+            tag_name="${{ inputs.custom_tag }}"
+            version="${tag_name#v}"
+            is_prerelease="${{ inputs.prerelease }}"
+            release_title="Release ${tag_name}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag_name="${GITHUB_REF_NAME}"
+            version="${tag_name#v}"
+            is_prerelease="false"
+            release_title="Release ${tag_name}"
+          else
+            version="0.10.0-nightly-${short_sha}"
+            tag_name="v0.10.0-${short_sha}"
+            is_prerelease="true"
+            release_title="Nightly Build (${short_sha})"
+          fi
+
+          echo "VERSION=${version}" >> "$GITHUB_OUTPUT"
+          echo "TAG_NAME=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_TITLE=${release_title}" >> "$GITHUB_OUTPUT"
+          echo "IS_PRERELEASE=${is_prerelease}" >> "$GITHUB_OUTPUT"
+          echo "Building version: ${version} (tag: ${tag_name})"
+
+      - name: Prepare Signing Keystore
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Using production signing keystore from GitHub Secrets"
+            mkdir -p "${RUNNER_TEMP}/keystore"
+            echo "$KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/keystore/release.keystore"
+            echo "KEYSTORE_FILE=${RUNNER_TEMP}/keystore/release.keystore" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${KEY_ALIAS}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${KEY_PASSWORD}" >> "$GITHUB_ENV"
+          else
+            echo "No production keystore provided — falling back to standard installable signing"
+          fi
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build Release APK & AAB
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease bundleRelease --stacktrace
+
+      - name: Prepare Artifacts & Checksums
+        shell: bash
+        run: |
+          mkdir -p dist
+          V="${{ steps.version.outputs.VERSION }}"
+
+          # Copy APK
+          APK_SRC="android/app/build/outputs/apk/release/app-release.apk"
+          if [ -f "$APK_SRC" ]; then
+            APK_DEST="dist/ReXGlue-${V}-arm64.apk"
+            cp "$APK_SRC" "$APK_DEST"
+            sha256sum "$APK_DEST" | awk '{print $1}' > "${APK_DEST}.sha256"
+            echo "Prepared $APK_DEST"
+          fi
+
+          # Copy AAB (Android App Bundle)
+          AAB_SRC="android/app/build/outputs/bundle/release/app-release.aab"
+          if [ -f "$AAB_SRC" ]; then
+            AAB_DEST="dist/ReXGlue-${V}.aab"
+            cp "$AAB_SRC" "$AAB_DEST"
+            sha256sum "$AAB_DEST" | awk '{print $1}' > "${AAB_DEST}.sha256"
+            echo "Prepared $AAB_DEST"
+          fi
+
+          ls -lh dist/
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rexglue-android-${{ steps.version.outputs.VERSION }}
+          path: dist/*
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' || github.event_name == 'workflow_dispatch') && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.TAG_NAME }}
+          name: ${{ steps.version.outputs.RELEASE_TITLE }}
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
+          make_latest: ${{ steps.version.outputs.IS_PRERELEASE != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
