@@ -64,10 +64,11 @@ jobs:
         run: |
           short_sha=$(git rev-parse --short HEAD)
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.custom_tag }}" ]]; then
-            tag_name="${{ inputs.custom_tag }}-app"
-            version="${{ inputs.custom_tag }#v}"
+            raw_tag="${{ inputs.custom_tag }}"
+            tag_name="${raw_tag}-app"
+            version="${raw_tag#v}"
             is_prerelease="${{ inputs.prerelease }}"
-            release_title="App Release ${{ inputs.custom_tag }}"
+            release_title="App Release ${raw_tag}"
           elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             tag_name="${GITHUB_REF_NAME}-app"
             version="${GITHUB_REF_NAME#v}"
